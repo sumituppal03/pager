@@ -1,0 +1,35 @@
+name: ✨ Feature or task
+description: Add or change something in the system
+title: "[feat]: "
+labels: ["type/feat"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One paragraph. What should be true after this ships?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: Bullet list of what will change
+      value: |
+        - [ ]
+        - [ ]
+
+  - type: textarea
+    id: outofscope
+    attributes:
+      label: Out of scope
+      description: Anything explicitly *not* in this issue, punted to another
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ]
+        - [ ]

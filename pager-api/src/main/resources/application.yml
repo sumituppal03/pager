@@ -1,0 +1,114 @@
+#
+# Pager — Spring Boot configuration
+#
+# Overrides live in application-<profile>.yml. For prod, we'll rely on
+# environment variables set by the deployment platform.
+#
+
+spring:
+  application:
+    name: pager-api
+
+  # ------------------------------------------------------------------
+  # Persistence
+  # ------------------------------------------------------------------
+  datasource:
+    url: ${PAGER_DB_URL:jdbc:postgresql://localhost:5432/pager}
+    username: ${PAGER_DB_USER:pager}
+    password: ${PAGER_DB_PASSWORD:pager}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 10000
+      idle-timeout: 300000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate # Flyway owns the schema, not Hibernate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+  # ------------------------------------------------------------------
+  # Redis
+  # ------------------------------------------------------------------
+  data:
+    redis:
+      url: ${PAGER_REDIS_URL:redis://localhost:6379}
+      timeout: 5000
+      connect-timeout: 5000
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+# ------------------------------------------------------------------
+# Server
+# ------------------------------------------------------------------
+server:
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+  error:
+    include-message: always # dev convenience; tighten in prod profile
+    include-binding-errors: always
+
+# ------------------------------------------------------------------
+# Actuator — /actuator/health used by Docker healthcheck
+# ------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics, prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+
+# ------------------------------------------------------------------
+# Pager domain config — env-overridable, read via @ConfigurationProperties
+# in later PRs. Declared here so the shape is visible from day one.
+# ------------------------------------------------------------------
+pager:
+  # Confidence threshold for auto-posting read-only analysis to Slack
+  confidence-autopost-threshold: 0.75
+
+  # Timeouts (per L8 of the study — every step degrades to correct)
+  specialist-timeout-ms: 45000
+  tool-call-timeout-ms: 15000
+
+  # LLM model routing
+  models:
+    fast: ${PAGER_MODEL_FAST:gpt-4o-mini}
+    quality: ${PAGER_MODEL_QUALITY:gpt-4o}
+    embed: ${PAGER_EMBED_MODEL:text-embedding-3-small}
+
+  # Budget guard
+  daily-budget-usd: ${PAGER_DAILY_BUDGET_USD:20.00}
+
+  # Webhook security
+  pagerduty-webhook-secret: ${PAGER_PAGERDUTY_WEBHOOK_SECRET:dev-only-change-me}
+
+# ------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------
+logging:
+  level:
+    root: INFO
+    dev.sumituppal.pager: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n"

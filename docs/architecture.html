@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Designing an AI Incident Response Agent — A First-Principles Architecture Study</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --ink: #1a1a1a;
+    --ink-soft: #4a4a4a;
+    --ink-fade: #8a8a8a;
+    --rule: #e5e5e0;
+    --rule-soft: #efefe8;
+    --accent: #7c3aed;
+    --code-bg: #f5f5f0;
+    --highlight: #fff7d6;
+    --serif: "Iowan Old Style", "Palatino Linotype", "URW Palladio L", "Book Antiqua", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    --mono: "SF Mono", "Menlo", "Monaco", "Consolas", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body { font-family: var(--serif); font-size: 18px; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+
+  main { max-width: 720px; margin: 0 auto; padding: 60px 32px 120px; }
+
+  .hairline { border: none; border-top: 1px solid var(--rule); margin: 40px 0; }
+  .hairline.deep { border-top: 2px solid var(--ink); margin: 60px 0 40px; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    font-weight: 600;
+    margin: 60px 0 8px;
+  }
+  .eyebrow.accent { color: var(--accent); }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: 44px;
+    line-height: 1.12;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    margin: 8px 0 24px;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-size: 32px;
+    line-height: 1.2;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    margin: 60px 0 20px;
+  }
+  h3 {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 500;
+    margin: 40px 0 14px;
+    letter-spacing: -0.01em;
+  }
+  h4 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--ink);
+    margin: 32px 0 12px;
+  }
+
+  p { margin: 0 0 18px; }
+  em { font-style: italic; }
+  strong { font-weight: 600; }
+
+  a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--ink-fade); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--accent); }
+
+  .lede {
+    font-size: 21px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 24px 0 40px;
+    font-style: italic;
+  }
+
+  .meta {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink-fade);
+    margin: 20px 0 60px;
+    letter-spacing: 0.01em;
+  }
+  .meta span::after { content: " · "; color: var(--rule); }
+  .meta span:last-child::after { content: ""; }
+
+  .callout {
+    border-left: 3px solid var(--accent);
+    padding: 4px 0 4px 20px;
+    margin: 24px 0;
+    font-size: 17px;
+    color: var(--ink-soft);
+    background: transparent;
+  }
+  .callout.thick {
+    border-left: 4px solid var(--ink);
+    padding-left: 24px;
+  }
+
+  .question-block {
+    background: var(--rule-soft);
+    padding: 22px 26px;
+    margin: 32px 0;
+    border-radius: 4px;
+  }
+  .question-block .label {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .question-block p { margin: 0; font-size: 16px; }
+  .question-block p + p { margin-top: 12px; color: var(--ink-soft); font-size: 15px; }
+
+  .carry {
+    border: 1px solid var(--ink);
+    padding: 20px 24px;
+    margin: 32px 0;
+    border-radius: 4px;
+    background: #fffdf5;
+  }
+  .carry .label {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--ink);
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .carry p { margin: 0; font-size: 16px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.55;
+    background: var(--code-bg);
+    padding: 20px 22px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 24px 0;
+    border: 1px solid var(--rule);
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--sans);
+    font-size: 14px;
+    margin: 28px 0;
+    line-height: 1.5;
+  }
+  th, td {
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    color: var(--ink);
+    border-bottom: 2px solid var(--ink);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  td code { font-size: 12px; }
+  .table-caption {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-fade);
+    font-style: italic;
+    margin: -14px 0 20px;
+  }
+
+  ul, ol { margin: 0 0 18px; padding-left: 26px; }
+  li { margin: 6px 0; }
+
+  .part-header {
+    text-align: center;
+    margin: 100px 0 40px;
+  }
+  .part-header .part-num {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--ink-fade);
+    font-weight: 700;
+  }
+  .part-header h2 {
+    font-size: 36px;
+    margin: 12px 0 0;
+  }
+  .part-header .part-tagline {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--ink-soft);
+    font-size: 18px;
+    margin: 12px 0 0;
+  }
+
+  .level-marker {
+    font-family: var(--sans);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+    margin: 48px 0 4px;
+  }
+
+  .driving {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 20px;
+    color: var(--ink-soft);
+    padding: 12px 0;
+    margin: 24px 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    text-align: center;
+  }
+
+  .ascii-diagram {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.4;
+    background: #fffdf5;
+    border: 1px solid var(--rule);
+    padding: 20px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin: 28px 0;
+    white-space: pre;
+  }
+  .diagram-caption {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-fade);
+    font-style: italic;
+    text-align: center;
+    margin: -14px 0 24px;
+  }
+
+  .ledger {
+    font-family: var(--sans);
+    font-size: 13px;
+    background: var(--rule-soft);
+    padding: 24px 28px;
+    border-radius: 4px;
+    margin: 32px 0;
+  }
+  .ledger h4 { margin-top: 0; }
+  .ledger table { margin: 12px 0 0; font-size: 12px; }
+
+  .toc {
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 24px 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    margin: 40px 0 60px;
+    line-height: 1.9;
+  }
+  .toc-row { display: flex; justify-content: space-between; gap: 20px; }
+  .toc-num { color: var(--ink-fade); min-width: 40px; }
+  .toc-title { color: var(--ink); }
+  .toc-part { font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-fade); font-size: 11px; margin: 14px 0 6px; }
+
+  .footer-note {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink-fade);
+    text-align: center;
+    margin: 80px 0 0;
+    padding-top: 40px;
+    border-top: 1px solid var(--rule);
+    line-height: 1.8;
+  }
+  .footer-note strong { color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+
+<div class="eyebrow">An Architecture Study</div>
+<h1>Designing an AI Incident Response Agent</h1>
+<div class="lede">
+An incident-response agent is not a runbook with an LLM bolted on. It is a fan-out of specialist reasoners over a live signal, grounded in retrieved system context, with every action written to one time-ordered spine — because the one thing more dangerous than a slow response is a wrong one at 3 AM. This study derives that architecture from first principles.
+</div>
+<div class="meta">
+  <span>Published July 2026</span>
+  <span>A first-principles derivation</span>
+  <span>Java 21 · Spring Boot 3 · LangChain4j · PGVector · Timescale</span>
+  <span>Read top to bottom</span>
+</div>
+
+<div class="callout">
+  <strong>How to read this.</strong> The pages that follow do not start with boxes and arrows. They start with questions — why an automated on-call responder exists at all, how a senior SRE actually diagnoses at 3 AM, what kinds of memory an incident needs. Each step in the climb ends with two things: <em>the question we ask</em> (a reusable thinking move that generalizes to other systems) and <em>a piece we carry into the architecture</em> (a concrete component, field, or rule). By the end those pieces assemble into the whole design, and every box can be traced back to the question that justified it.
+</div>
+
+<div class="toc">
+  <div class="toc-part">Part 0 — Mindset</div>
+  <div class="toc-row"><span class="toc-num">0.1</span><span class="toc-title">The Universal Design Template</span></div>
+  <div class="toc-row"><span class="toc-num">0.2</span><span class="toc-title">The Failure Modes Catalog</span></div>
+  <div class="toc-row"><span class="toc-num">0.3</span><span class="toc-title">The Human-in-the-Loop Spectrum</span></div>
+  <div class="toc-row"><span class="toc-num">0.4</span><span class="toc-title">The 20-Phase Production Lens</span></div>
+
+  <div class="toc-part">Part I — First Principles</div>
+  <div class="toc-row"><span class="toc-num">L0</span><span class="toc-title">Why This System Exists</span></div>
+  <div class="toc-row"><span class="toc-num">L1</span><span class="toc-title">How a Senior SRE Diagnoses</span></div>
+  <div class="toc-row"><span class="toc-num">L2</span><span class="toc-title">Map the Mess</span></div>
+  <div class="toc-row"><span class="toc-num">L3</span><span class="toc-title">Industry-Standard Thinking</span></div>
+  <div class="toc-row"><span class="toc-num">L4</span><span class="toc-title">The Grounding Problem</span></div>
+  <div class="toc-row"><span class="toc-num">L5</span><span class="toc-title">What Kinds of Memory</span></div>
+  <div class="toc-row"><span class="toc-num">L6</span><span class="toc-title">Trust and Proof</span></div>
+  <div class="toc-row"><span class="toc-num">L7</span><span class="toc-title">When Not to Trust It</span></div>
+  <div class="toc-row"><span class="toc-num">L8</span><span class="toc-title">Failure Modes, Applied</span></div>
+  <div class="toc-row"><span class="toc-num">L9</span><span class="toc-title">The Mental Model</span></div>
+
+  <div class="toc-part">Part II — From Principles to Data</div>
+  <div class="toc-row"><span class="toc-num">2.1</span><span class="toc-title">Three Shapes, One Reflex</span></div>
+  <div class="toc-row"><span class="toc-num">2.2</span><span class="toc-title">One Store, Not Three</span></div>
+  <div class="toc-row"><span class="toc-num">2.3</span><span class="toc-title">Three Lanes in Schema</span></div>
+
+  <div class="toc-part">Part III — Architecture Assembled</div>
+  <div class="toc-row"><span class="toc-num">3.1</span><span class="toc-title">Ingress &amp; the Queue</span></div>
+  <div class="toc-row"><span class="toc-num">3.2</span><span class="toc-title">The Orchestrator</span></div>
+  <div class="toc-row"><span class="toc-num">3.3</span><span class="toc-title">Specialists &amp; Aggregator</span></div>
+  <div class="toc-row"><span class="toc-num">3.4</span><span class="toc-title">The Retrieval Path</span></div>
+  <div class="toc-row"><span class="toc-num">3.5</span><span class="toc-title">The Events Spine</span></div>
+  <div class="toc-row"><span class="toc-num">3.6</span><span class="toc-title">The Full System</span></div>
+
+  <div class="toc-part">Part IV — Implementation Plan</div>
+  <div class="toc-row"><span class="toc-num">4.1</span><span class="toc-title">The 20-Phase Roadmap</span></div>
+  <div class="toc-row"><span class="toc-num">4.2</span><span class="toc-title">The Module Map</span></div>
+
+  <div class="toc-part">Closing</div>
+  <div class="toc-row"><span class="toc-num">5.1</span><span class="toc-title">The Transferable Framework</span></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Part 0 · The Thinking Mindset</div>
+  <h2>The lens before the system</h2>
+  <div class="part-tagline">Four reusable instruments, none specific to incidents yet.</div>
+</div>
+
+<p>Before any incident-response-specific design, four reusable instruments. A template that turns any messy workflow into an agentic system. A catalog of the ways agentic systems fail. A spectrum for deciding how much human stays in the loop. And a lifecycle that scaffolds the whole build. None of these are about incidents yet. They are the way of seeing that the rest of the study uses.</p>
+
+<div class="driving">
+  How do you design an agent that responds to an outage as reliably as a careful senior SRE — and proves its work when the post-mortem starts?
+</div>
+
+<div class="eyebrow accent">0.1</div>
+<h3>The Universal Design Template</h3>
+<p>After enough systems, intuition becomes a repeatable process. Five moves turn any workflow, in any domain, into an agentic design. We will apply all five to incident response in Part I.</p>
+
+<h4>Move 1. Map the mess</h4>
+<p>Document what actually happens today, not the runbook nobody follows. Watch the on-call SRE at 3 AM. Record the trigger that wakes them, every tab they open, every dashboard they check, where they are actually <em>thinking</em> versus mechanically shuffling information, and where the process breaks.</p>
+
+<h4>Move 2. Name the trigger and the output</h4>
+<p>Every automatable workflow has a precise trigger and a precise output. "A PagerDuty page fires with severity ≥ P2," not "an alert comes in." "A structured triage report is posted to the incident Slack channel," not "the on-call responds." If you cannot state both in one sentence each, you have not looked closely enough.</p>
+
+<h4>Move 3. Assign components</h4>
+<p>Take each step and assign it to a component type. Detecting that work is needed is a <strong>trigger</strong>. Fetching logs, metrics, or deploy history is a <strong>tool/API</strong>. Reading unstructured input (log lines, error traces) or writing language (the summary) is an <strong>LLM</strong>. A score or classification that must be identical every time — severity, blast radius category — is <strong>deterministic ML</strong>. A judgment that could bring down production if wrong — a rollback, a database migration — is a <strong>human checkpoint</strong>.</p>
+
+<div class="callout thick">
+  <strong>Most common mistake.</strong> Assigning an LLM to a step that should be deterministic. If the output must be the same every time given the same input — a severity score, a routing class, a runbook match — it must be deterministic. If the output is language and some variation is acceptable, it can be an LLM.
+</div>
+
+<h4>Move 4. Choose autonomy</h4>
+<p>Decide how much the system does on its own versus how much it defers to a human. This is not a default — it is a design choice driven by the consequence of error. Section 0.3 gives the full spectrum. In incident response, this choice matters more than almost anywhere: the system can post an analysis autonomously, but it must never <em>execute a rollback</em> without a human.</p>
+
+<h4>Move 5. Design for failure</h4>
+<p>Walk each component and break it on purpose. What happens when the LLM hallucinates a root cause, the log API times out, two parallel agents contradict each other on severity? Every component should fail gracefully.</p>
+
+<div class="callout">
+  The system should degrade to <em>slower but correct</em>, never <em>fast but wrong</em>. The worst failure mode is a wrong diagnosis delivered with confidence at 3 AM, because a groggy human will believe it.
+</div>
+
+<div class="eyebrow accent">0.2</div>
+<h3>The Failure Modes Catalog</h3>
+<p>Every agentic system fails. The only question is whether it fails safely. Seven recurring modes, and how to design against each. We will run this catalog against incident response in L8.</p>
+
+<table>
+<thead><tr><th>Mode</th><th>What happens</th><th>Design against it with</th></tr></thead>
+<tbody>
+<tr><td>Hallucination in a critical path</td><td>The model states a plausible-but-false root cause in a place that matters</td><td>Citation requirement (link to the exact log line), a fact-check layer, human review for high-stakes actions, prompts that permit "I don't know"</td></tr>
+<tr><td>Model drift</td><td>Accurate at deployment, degrades as systems and services evolve</td><td>Monitoring dashboard, alert thresholds, periodic re-embedding of runbooks, rules fallback</td></tr>
+<tr><td>Tool / API timeout</td><td>Datadog stalls; the Prometheus query hangs; the whole pipeline waits</td><td>Timeout-and-retry, graceful degradation on partial data, circuit breaker on a dead source</td></tr>
+<tr><td>Feedback-loop poisoning</td><td>An SRE marks a bad diagnosis as "correct" to close the incident faster; future diagnoses degrade</td><td>Minimum evidence threshold, audit for gaming, decay on old feedback, periodic human reset</td></tr>
+<tr><td>Orchestration deadlock</td><td>Two parallel steps wait on each other; the aggregator never receives an input</td><td>Timeouts on every step, health checks, idempotent operations, dead-letter queue</td></tr>
+<tr><td>Human bottleneck</td><td>Auto-triage works, but the escalation queue grows faster than SREs clear it</td><td>Escalation-rate monitoring, queue prioritization, threshold tuning under load, honest capacity planning</td></tr>
+<tr><td>The "almost-right" problem</td><td>Diagnosis 90% correct, 10% subtly wrong; groggy on-call SRE trusts it and makes it worse</td><td>Rotate reviewers, flag low-confidence outputs, random audits, inject known-wrong inputs to test vigilance</td></tr>
+</tbody>
+</table>
+<div class="table-caption">Seven general agentic failure modes.</div>
+
+<div class="eyebrow accent">0.3</div>
+<h3>The Human-in-the-Loop Spectrum</h3>
+<p>Not every system needs the same level of human involvement. The right level is a design choice, not a default. Five levels, and the three factors that pick one.</p>
+
+<table>
+<thead><tr><th>Level</th><th>Description</th><th>Where it fits</th></tr></thead>
+<tbody>
+<tr><td>Full automation</td><td>System handles everything; human samples periodically</td><td>Routine, low-stakes, reversible work</td></tr>
+<tr><td>Human reviews output</td><td>System produces, human verifies before it goes out</td><td>Drafts with reputational stakes</td></tr>
+<tr><td>Human handles exceptions</td><td>System auto-handles easy cases, human sees the hard ones</td><td>Anomalies, low-confidence cases, escalations</td></tr>
+<tr><td>Human decides, system prepares</td><td>System gathers all context, human makes the call</td><td>High-consequence, irreversible decisions</td></tr>
+<tr><td>Full human with AI assist</td><td>Human does the work, system helps at specific steps</td><td>Early-stage, low-trust, or creative work</td></tr>
+</tbody>
+</table>
+
+<p><strong>Three factors choose the level.</strong> <em>Consequence of error:</em> a wrong severity label is annoying; an autonomous rollback of a stateful service is catastrophic. <em>Reversibility:</em> a Slack message can be edited; a dropped Kafka topic cannot be un-dropped. <em>System maturity:</em> new systems need more oversight; proven ones earn less.</p>
+
+<div class="callout">
+  Start with more human involvement than you think you need. Reduce it as the system proves itself. It is far easier to remove a checkpoint than to recover from removing it too early — and in production incidents, "too early" can mean an outage caused by the tool built to prevent them.
+</div>
+
+<div class="eyebrow accent">0.4</div>
+<h3>The 20-Phase Production Lens</h3>
+<p>Beginners design the happy path: receive alert, reason, respond. Senior engineers add the back half: observe, secure, recover, govern, optimize, learn. A twenty-phase lifecycle names every phase, and our build plan in Part IV follows it exactly.</p>
+
+<table>
+<thead><tr><th>Phase</th><th>Concern</th></tr></thead>
+<tbody>
+<tr><td>0 Cognitive Design</td><td>What thinking should the system perform; autonomy level; HITL boundaries</td></tr>
+<tr><td>1 System Architecture</td><td>Boundaries, style, module graph, ADRs</td></tr>
+<tr><td>2 Frontend</td><td>Dashboard shell, live incident timeline, streaming</td></tr>
+<tr><td>3 Backend &amp; API</td><td>Spring Boot, webhook, idempotency, state</td></tr>
+<tr><td>4 Workflow Orchestration</td><td>Topology, checkpointing, parallel fan-out</td></tr>
+<tr><td>5 LLM &amp; Reasoning</td><td>Model routing, structured output, prompt registry</td></tr>
+<tr><td>6 Memory Architecture</td><td>RAG, hybrid retrieval, the vector lane</td></tr>
+<tr><td>7 Tooling &amp; Sandboxing</td><td>Tool registry, read-only vs write-scope, permissions</td></tr>
+<tr><td>8 Multi-Agent Systems</td><td>Roles, contracts, the aggregator</td></tr>
+<tr><td>9 Evaluation</td><td>Golden incidents, LLM-as-judge, regression gates</td></tr>
+<tr><td>10 Observability</td><td>Traces, token cost, alerts — the events spine</td></tr>
+<tr><td>11 Security</td><td>Threat model, prompt injection, RBAC, Zero Trust</td></tr>
+<tr><td>12 Reliability</td><td>Circuit breakers, idempotency, checkpointing</td></tr>
+<tr><td>13 Infrastructure</td><td>Containers, queues, data-layer provisioning</td></tr>
+<tr><td>14 Data Engineering</td><td>Ingestion pipelines, schema, encoding</td></tr>
+<tr><td>15 Governance</td><td>Audit trails, explainability, residency</td></tr>
+<tr><td>16 Economics</td><td>Token cost attribution, budget caps, routing efficiency</td></tr>
+<tr><td>17 Developer Experience</td><td>Prompt playground, trace viewer, replay</td></tr>
+<tr><td>18 CI/CD for AI</td><td>Prompt versioning, eval gates, canary releases</td></tr>
+<tr><td>19 Human-in-the-Loop</td><td>Approval workflows, escalation, dispute</td></tr>
+<tr><td>20 Continuous Learning</td><td>Feedback loops, drift detection</td></tr>
+</tbody>
+</table>
+<div class="table-caption">The production lifecycle as a thinking scaffold.</div>
+
+<div class="carry">
+  <div class="label">Part 0 — carry forward</div>
+  <p>Four reusable instruments, none specific to incidents yet: a <strong>five-move design template</strong> (map the mess, name trigger &amp; output, assign components, choose autonomy, design for failure); a <strong>seven-mode failure catalog</strong> to run against any agentic design; a <strong>five-level HITL spectrum</strong>, chosen by consequence, reversibility, and maturity; and a <strong>twenty-phase lifecycle</strong> that scaffolds the build and forces the back half into view.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Part I · First Principles</div>
+  <h2>Why automated triage exists, before how it works</h2>
+  <div class="part-tagline">Ten levels from "why this exists" to the full mental model.</div>
+</div>
+
+<p>Most people ask how to build an incident response agent. The better question is why one exists at all, because once you can answer that, the architecture becomes almost obvious. This part climbs from that first principle to a complete reasoning model in ten levels.</p>
+
+<p>Read it twice. The first time for the incident agent. The second time for the method — the order of questions a strong engineer asks when handed any system they have never seen. Each level ends with <strong>the question we ask</strong> (the reusable move) and <strong>carry into the architecture</strong> (the concrete piece we keep). By the end those pieces assemble into one design.</p>
+
+<div class="driving">
+  A PagerDuty alert fires at 3:04 AM. A webhook lands. What, exactly, should happen next — and why?
+</div>
+
+<div class="level-marker">L0</div>
+<h3>Why This System Exists</h3>
+
+<p>Imagine an on-call rotation without any automated triage. Every alert wakes a senior SRE. That attention is the scarce resource: it is <em>slow</em> (context-gathering takes 10–20 minutes before any diagnosis), <em>inconsistent</em> (a groggy 3 AM engineer misses signals an alert one hour into a shift would catch), and <em>expensive</em> (in wall-clock recovery time, in engineer burnout, and in every minute of a P1 that the business is losing money). The cost is not "no response happens" — it is that the <em>most expensive, most valuable human time</em> on the team is spent on the mechanical parts of triage before the actual thinking begins.</p>
+
+<p>So an automated responder exists to solve exactly one problem: <strong>reclaiming the on-call SRE's context-gathering attention by automating the mechanical parts of triage</strong>, so the human is spent only where judgment is genuinely required — deciding what to do, and doing it.</p>
+
+<div class="callout thick">
+  An incident agent is not a replacement for human judgment. It is a way to spend human judgment only where it is actually scarce — the moment the human wakes up, joins the war room, and reads the agent's structured brief instead of running <code>kubectl logs</code> for the first ten minutes.
+</div>
+
+<p>Hold onto the word <em>selective</em>. The system should not flood the incident channel with every conceivable signal. It should surface high-value findings with confidence and rationale, and route uncertain ones as questions to the human. That selectivity is the seed of the whole architecture.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>Why does this system exist at all, and what single cost or loss does it remove?</p>
+  <p><em>Generalizes to:</em> before any component, name the one scarcity the system relieves. A search system relieves the cost of not finding; a payments ledger relieves the cost of disputed truth; an incident agent relieves the cost of unstructured 3 AM context-gathering. If you cannot name it, you are designing a feature nobody needs.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>A selective, high-value posture.</strong> The system optimizes for surfacing findings worth an SRE's attention and deferring the rest — not for maximum output. Selectivity, not coverage, is the first principle.</p>
+</div>
+
+<div class="level-marker">L1</div>
+<h3>Start From How a Senior SRE Diagnoses</h3>
+
+<p>Before touching LLMs, prompts, or vector databases, ask how a senior SRE actually diagnoses an alert. When you are designing something genuinely hard, look for a system that already solved it. Human incident triage has been refined over decades of running production, and the structure we need is sitting inside how a good on-call thinks.</p>
+
+<p>Watch one closely. They do four things that a naive single-prompt responder does not. They <strong>gather system context</strong> — recent deploys, current traffic, feature-flag state, known ongoing incidents. They <strong>reason across separate concerns</strong> — a symptoms pass (what is breaking), a change-correlation pass (what changed recently), a metrics pass (what the numbers say), a comms pass (who needs to know now). They <strong>stay skeptical</strong> — they do not assume the alert message is telling the truth. And they <strong>cite evidence</strong> — "the p99 latency spiked at 03:04:22, which matches the deploy timestamp of pod-checkout-7c9," not "looks like the deploy did it."</p>
+
+<p>Read those four again as an engineer. "Gather system context" means the agent needs retrieval and tool calls into observability systems. "Reason across separate concerns" means the agent is not one reasoner but several. "Stay skeptical" and "cite evidence" mean every finding needs a rationale and a confidence.</p>
+
+<h4>Symptoms specialist — "what is actually breaking?"</h4>
+<p>Reads the alert, the immediately-preceding log lines, the current error rate, the affected endpoints. Distinguishes the failing surface from the alert's summary text (which is often stale or wrong).</p>
+
+<h4>Change specialist — "what changed recently?"</h4>
+<p>Reads deploy history, feature-flag changes, config-map updates, cron-job runs, migrations, third-party API status pages. In production, the answer is almost always "something changed" — this specialist finds it.</p>
+
+<h4>Metrics specialist — "what do the numbers say?"</h4>
+<p>Queries Prometheus / Datadog / New Relic for the affected service, correlates against baselines, identifies the earliest deviation timestamp. Turns "the service is slow" into "p99 latency doubled at 03:04:22, 47 seconds before the alert fired."</p>
+
+<h4>Comms specialist — "who needs to know, and what do they need to know?"</h4>
+<p>Drafts the two artifacts a human on-call always writes: (a) the customer-facing status-page update if it clears the threshold, and (b) the internal channel message with the current diagnosis, blast radius, and next steps.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>Is there a mature system — human or engineered — that already solved a version of this, and what structure can I borrow from it?</p>
+  <p><em>Generalizes to:</em> analogies hand you a ready-made decomposition. A recommendation system borrows from word of mouth; a cache borrows from working memory; an incident agent borrows from how a senior on-call actually thinks at 3 AM.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>Four specialist concerns, born from how a human triages.</strong> The system is not one reasoner but four — <code>symptoms</code>, <code>change</code>, <code>metrics</code>, <code>comms</code> — each a distinct pass with its own mindset. This is the seed of the multi-agent design.</p>
+</div>
+
+<div class="level-marker">L2</div>
+<h3>Map the Mess</h3>
+
+<p>Now apply the Part 0 template. <strong>Map the mess</strong> of what happens on an alert today: PagerDuty fires, the SRE fumbles for their laptop, opens six tabs (logs, metrics, deploy history, Slack, the runbook wiki, the status page), reads for ten minutes, then finally starts thinking. The reading is pure cost.</p>
+
+<p><strong>Name the trigger and the output.</strong> The trigger is precise: a PagerDuty (or Opsgenie, or Grafana OnCall) webhook fires with a payload containing <code>incident_id</code>, <code>severity</code>, <code>service</code>, and <code>alert_summary</code>. The output is precise too: a single structured triage report, posted back to the incident's Slack channel <em>within 90 seconds</em> of the trigger, with findings attached to specific services, timestamps, and evidence sources.</p>
+
+<p>That word <em>structured</em> is doing strategic work. A triage report is not a blob of prose. It is a list of findings, each with a shape: which specialist raised it, how severe, what timestamp, what service, why, what evidence link, and how sure the agent is. Deciding that shape now is what lets every later component — the aggregator, the HITL gate, the audit trail — do its job. A first cut of that shape:</p>
+
+<h4>agent_type / which specialist raised this</h4>
+<p><code>symptoms</code>, <code>change</code>, <code>metrics</code>, or <code>comms</code> — so findings can be grouped and attributed.</p>
+
+<h4>severity + category / how bad, what kind</h4>
+<p><code>P0</code> down to <code>INFO</code>; a category like <code>deploy-regression</code>, <code>upstream-failure</code>, <code>capacity</code>, <code>data-quality</code>.</p>
+
+<h4>service / timestamp / affected surface</h4>
+<p>The service name (canonical, from your service catalog), the earliest evidence timestamp, and the surface (endpoint, queue, batch job) — so the finding is actionable, not "something's wrong somewhere."</p>
+
+<h4>evidence + confidence + rationale</h4>
+<p>A link to the exact log line, dashboard, or deploy record that backs the finding. Confidence drives the HITL gate. Rationale is what makes the finding auditable in the post-mortem — because there <em>will</em> be a post-mortem.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>What is the precise trigger, the precise output, and the shape of the object that travels between every component?</p>
+  <p><em>Generalizes to:</em> a system is components plus the contract between them. Name the trigger and the output first, then name the object on the arrows. The object usually matters more than the boxes.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>An ingress trigger and a structured findings contract.</strong> The trigger is a PagerDuty webhook; the output is a structured triage report. The unit that flows through the system is a <strong>Finding</strong> with <code>agent_type</code>, <code>severity</code>, <code>category</code>, <code>service</code>, <code>timestamp</code>, <code>evidence_url</code>, <code>confidence</code>, and <code>rationale</code>.</p>
+</div>
+
+<div class="level-marker">L3</div>
+<h3>Industry-Standard Thinking</h3>
+
+<p>Most people picture one arrow: alert in, LLM, Slack message out. That is not how a capable incident system works, and the gap between those pictures is the gap between a demo and a system you would actually page at 3 AM. Walk the rungs of how the industry has climbed toward incident automation, and watch why each prior rung falls short.</p>
+
+<table>
+<thead><tr><th>Rung</th><th>What it does</th><th>Why it falls short</th></tr></thead>
+<tbody>
+<tr><td>Runbooks + wiki</td><td>Match alert to a documented procedure; human executes</td><td>Wikis rot within weeks of the last incident that touched them. No grounding in live state.</td></tr>
+<tr><td>Rule-based automation (Rundeck, StackStorm)</td><td>Match alert pattern to a scripted response; auto-remediate simple cases</td><td>Cannot reason about novel failures. Explodes into a rule-per-incident mess by year two.</td></tr>
+<tr><td>Single-LLM triage</td><td>One prompt reads the alert + logs and drafts a summary</td><td>One mindset for four concerns; no grounding in the system's real state; hallucinates root causes with confidence; no audit trail.</td></tr>
+<tr><td>Agentic fan-out</td><td>Specialist agents, each grounded in the right data source, each skeptical, merged by an aggregator</td><td>The rung this design stands on — but it demands orchestration, retrieval, tool-scoping, and a proof layer.</td></tr>
+</tbody>
+</table>
+
+<p>The single-LLM rung is the seductive one, because it works in a demo. It collapses four concerns into one prompt, which means it does each of them shallowly, and it has no way to be grounded in the live system, audited against the runbook, or trusted with even a Slack post at scale. The fan-out rung — running the four concerns from L1 as parallel specialists — is where production lives.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>What does the mature version of this decompose into, beyond the happy path the demo shows?</p>
+  <p><em>Generalizes to:</em> every interesting system has a hidden back half. List the rungs the industry has already climbed, and stand on the highest one whose cost you can actually pay.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>Parallel specialists, not a single prompt.</strong> The four concerns from L1 run as four agents in parallel, each doing one job deeply against its own data source. This is the agentic fan-out, and it implies an orchestrator and an aggregator we will name later.</p>
+</div>
+
+<div class="level-marker">L4</div>
+<h3>The Grounding Problem</h3>
+
+<p>Here is where most single-LLM incident responders fail. An LLM handed an alert message in isolation knows what the alert says but nothing about the system it fired against. It cannot know that the <code>checkout-service</code> was deployed 90 seconds ago, that a feature flag flipped at 03:02, that the same alert fired last month and turned out to be a Redis eviction storm. So it does what models do under uncertainty: it guesses, confidently. That is hallucination in a critical path — the first failure mode from the 0.2 catalog, and the most dangerous one in incident response, because a groggy human at 3 AM will act on a confident wrong answer.</p>
+
+<p>A senior SRE does not have this problem because they <em>know the system</em>. The design question is: what gives the agent that knowledge? It cannot be the full observability stack in the prompt — that exhausts the context window on any non-trivial infrastructure, and most of it is irrelevant to a given alert. The answer is retrieval + tool calls: for each alert, fetch only the most relevant slices of live system state, and put those in the prompt.</p>
+
+<div class="callout thick">
+  An ungrounded responder is a confident stranger at 3 AM. A grounded one is the senior SRE who has already been paged on this service twice this quarter. Retrieval is what turns the stranger into the colleague — and tool-calling is what lets the colleague ask "what's the current p99?" instead of guessing.
+</div>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>What does this reasoner need to know that is not in front of it, and how do we put exactly that — and only that — in front of it?</p>
+  <p><em>Generalizes to:</em> any LLM judging an artifact in isolation hallucinates. Retrieval-augmented generation is the general fix — fetch the relevant context, do not dump everything, do not assume the model already knows.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>A retrieval + tools layer.</strong> Each specialist queries for the context relevant to the alert — past incidents (RAG), runbooks (RAG), and live state (Prometheus, deploy history, feature flags — via tool calls). Grounding is not optional; it is what separates this from a single-LLM demo.</p>
+</div>
+
+<div class="level-marker">L5</div>
+<h3>What Kinds of Memory Does Triage Need?</h3>
+
+<p>L4 said "retrieve context." But context is not one kind of thing. A senior SRE draws on several kinds of memory, and — exactly as in cognitive science — each kind has a different shape and a different access pattern. Naming them now is what determines the data design later.</p>
+
+<table>
+<thead><tr><th>Kind of memory</th><th>What it holds for triage</th><th>The data shape it wants</th></tr></thead>
+<tbody>
+<tr><td>Semantic</td><td>Runbooks, past incident post-mortems, architecture docs, service ownership — as meaning</td><td>Vector embeddings + similarity search</td></tr>
+<tr><td>Episodic</td><td>Past triage runs — which alerts fired, what the agent said, what the human decided, whether they overrode</td><td>Time-stamped relational rows</td></tr>
+<tr><td>Procedural</td><td>Team conventions, severity policy, service-to-team mapping, escalation rules</td><td>Small, high-priority, almost always loaded</td></tr>
+<tr><td>Live-state</td><td>The current p99, the last deploy, the current feature-flag state, the current queue depth</td><td>Not stored — <em>fetched</em> per triage, via tool calls</td></tr>
+</tbody>
+</table>
+
+<p>Read those four again as an engineer. Semantic memory wants similarity search over embeddings — a vector store. Episodic memory wants time-ordered, queryable rows — relational history. Procedural memory is small and structured — facts and rules. And live-state is <em>not memory at all</em> — it is a tool call, because a value that is 60 seconds stale is worthless in an incident.</p>
+
+<p>The taxonomy is not philosophy; it is a schema waiting to be written, and it tells us we do not have one data need but three distinct <em>stored</em> shapes plus a live tool-call layer.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>What distinct kinds of state does this system hold, and does each kind want a different shape rather than one undifferentiated bucket?</p>
+  <p><em>Generalizes to:</em> before choosing storage, enumerate the kinds of state by access pattern. Hot vs cold, similarity vs exact, append-only vs mutable, stored vs fetched-live. The kinds drive the shapes; the shapes drive the stores.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>Three stored shapes plus one live layer.</strong> Semantic memory of runbooks and post-mortems wants a <strong>vector / ANN</strong> shape. Past triage runs want a <strong>relational</strong> shape. Conventions and policies want a small structured shape. And live production state is <em>never stored</em> — it is fetched per triage via a tool-registry we will design in Part III.</p>
+</div>
+
+<div class="level-marker">L6</div>
+<h3>Trust and Proof</h3>
+
+<p>Suppose the agent posts a finding: "the outage is caused by the checkout-service deploy at 03:03:14, confidence 0.72." The SRE on-call trusts it, initiates a rollback — and the outage gets worse, because the real cause was a downstream vendor's API. The post-mortem asks the obvious question: <em>why did the agent say that, and what evidence did it have?</em> If there is no record of which context was retrieved, which prompt version ran, what the model returned, what tools were called, and what they returned — the system cannot defend itself, cannot be debugged, and cannot improve. A triage you cannot audit is worthless, and one whose cost can run away unobserved is dangerous.</p>
+
+<p>So trust requires a third thing beyond reasoning and grounding: <strong>proof</strong>. Every action the agent takes — every span of work, every LLM call, every tool call, every decision — must be recorded as an event, in time order, durably. That single stream of events is what powers three things at once: a trace viewer (reconstruct any triage end-to-end), an audit trail (defend or dispute any finding), and a cost ledger (attribute every token to a specialist and a model).</p>
+
+<div class="callout thick">
+  If the system cannot show its work, it has not done the work. In incident response, the proof layer is not instrumentation bolted on at the end — it is born here, as a first principle, the moment we ask a machine to advise a human at 3 AM on whether to roll back production.
+</div>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>When this system produces an output, can it prove how it got there — and can it tell us what that cost?</p>
+  <p><em>Generalizes to:</em> any system making consequential automated decisions needs an immutable, time-ordered record of its actions. Payments, fraud scoring, medical triage, production incidents. Design the audit stream with the decision, not after the incident.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>An events spine.</strong> Every action becomes a time-ordered event row — span, LLM call, tool call, decision — carrying cost, latency, confidence, and outcome. One stream feeds the trace viewer, the audit trail, and the cost ledger. This is a fourth data need, time-series in shape.</p>
+</div>
+
+<div class="level-marker">L7</div>
+<h3>When Not to Trust It</h3>
+
+<p>L0 said the system should be selective. L6 gave it the confidence field. Now apply the 0.3 HITL spectrum to <em>this</em> system. The agent is not always right, and it knows roughly when it is unsure — that is what the <code>confidence</code> on each finding measures. The design decision is what to do with that knowledge — and in incident response, this is the most consequential design decision in the whole system.</p>
+
+<p>The answer is a confidence-weighted gate, layered with a hard rule: <strong>the agent never executes production actions autonomously</strong>. It can post analysis. It can suggest a rollback. It can pre-fill the rollback command in Slack for a human to click. It cannot press the button. That is not a technology choice — it is a values choice, because the consequence of a wrong autonomous rollback exceeds the consequence of a slower human-approved one.</p>
+
+<table>
+<thead><tr><th>Condition</th><th>Action</th><th>Which 0.3 factor</th></tr></thead>
+<tbody>
+<tr><td>High-confidence read-only analysis (all findings ≥ 0.75)</td><td>Post automatically to incident channel</td><td>Maturity earns autonomy; reversible action</td></tr>
+<tr><td>Any finding below 0.75</td><td>Post to channel with explicit "low confidence" tag; route to on-call for verification</td><td>Uncertainty, defer judgment</td></tr>
+<tr><td>Any P0 severity or write-action suggestion</td><td>Route to human approval; suggested action is pre-filled but not executed</td><td>Consequence of error too high; irreversibility</td></tr>
+<tr><td>Human overrides the agent's diagnosis</td><td>Store override + reason as feedback; increase weight on human input for similar future signals</td><td>Learning loop, reversibility</td></tr>
+</tbody>
+</table>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>Where on the human-involvement spectrum does this system belong, and what signal moves a given case up or down it?</p>
+  <p><em>Generalizes to:</em> autonomy is not binary. Let the system earn it case by case, gated on a confidence signal and the stakes. Content moderation, lending, triage — all use the same confidence-weighted routing. Incident response tightens it further by adding a hard rule: <em>read-only actions can be automatic; write-actions never are.</em></p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>A two-layer HITL gate.</strong> Layer one: confidence-weighted routing for read-only outputs (post autonomously above threshold; tag as low-confidence below). Layer two: <em>all write actions require human approval, regardless of confidence</em>. The gate implies queue and feedback tables in the relational shape from L5, and a pre-filled-but-unexecuted action pattern.</p>
+</div>
+
+<div class="level-marker">L8</div>
+<h3>Failure Modes, Applied</h3>
+
+<p>Run the 0.2 catalog directly against incident response. Each general failure mode lands on a specific defense, and — notice — each defense is a component we have already carried or are about to add.</p>
+
+<table>
+<thead><tr><th>General failure (0.2)</th><th>In incident response it looks like</th><th>Defense</th></tr></thead>
+<tbody>
+<tr><td>Hallucination in critical path</td><td>A confident root-cause diagnosis pointing at code the agent never actually looked at</td><td>Grounding + evidence citations + confidence gate (L4, L2, L7)</td></tr>
+<tr><td>Tool / API timeout</td><td>Prometheus stalls; the metrics specialist waits forever</td><td>Timeouts on every tool call, degrade to partial data with explicit gaps flagged, circuit breaker</td></tr>
+<tr><td>Orchestration deadlock</td><td>The aggregator waits forever on a hung specialist</td><td>Node-level timeouts, dead-letter handling, forced-partial aggregation after 60s</td></tr>
+<tr><td>The "almost-right" problem</td><td>A diagnosis that identifies the correct service but the wrong deploy revision</td><td>Cross-specialist agreement scoring, confidence penalty on single-source findings, HITL gate (L7)</td></tr>
+<tr><td>Human bottleneck</td><td>The write-action approval queue backs up during a multi-service outage</td><td>Priority queue by severity; escalation-rate monitoring on the events spine (L6)</td></tr>
+<tr><td>Feedback-loop poisoning</td><td>SREs mark all diagnoses "correct" to close incidents faster; the agent thinks it is improving</td><td>Minimum evidence threshold; sample-audit of "correct" markings; decay on old feedback</td></tr>
+<tr><td>Idempotency gap</td><td>PagerDuty retries the webhook; two parallel triages run for the same incident</td><td>Idempotency key on <code>incident_id + payload_hash</code> at ingress; dedup before posting</td></tr>
+</tbody>
+</table>
+
+<div class="callout">
+  Failure analysis did not invent new parts. It justified the parts we chose and added a thin layer of reliability mechanics on top.
+</div>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>For each component, what happens when it fails, and does the system degrade to slower-but-correct rather than fast-but-wrong?</p>
+  <p><em>Generalizes to:</em> run a pre-mortem before code. Walk each box and break it on purpose. The fallbacks you design now are the incidents you avoid later — and in a system designed to respond to incidents, this discipline is not optional.</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>A reliability layer.</strong> Timeouts on every tool and LLM call, circuit breakers on external sources, idempotency at ingress, dead-letter queue on the orchestrator, cross-specialist agreement scoring in the aggregator, and priority queuing on the human approval channel — each mapped to a specific failure mode, not added speculatively.</p>
+</div>
+
+<div class="level-marker">L9</div>
+<h3>The Mental Model</h3>
+
+<p>Before we draw a single box, the assembled reasoning in prose. The pieces we carried, in the order they were earned, already describe the whole system.</p>
+
+<p>A PagerDuty alert triggers the work (L2). It is enqueued, not handled inline, because the trigger must be acknowledged fast and the work decoupled from the ingress (L2, L8). An orchestrator fans the work out to four specialists — symptoms, change, metrics, comms (L1, L3) — running in parallel. Each specialist is grounded by retrieval over runbooks and past incidents (L4, L5), and by tool calls into live observability systems (L5). The runbooks, the past triage runs, the conventions, and the live state are four distinct kinds of context (L5). Each specialist returns structured findings with confidence, evidence, and rationale (L2). An aggregator merges them, computes cross-specialist agreement, applies the HITL gate (L7): post read-only analysis autonomously when confident, tag as low-confidence otherwise, and <em>never</em> execute write-actions without human approval. Every action along the way is written to an events spine (L6) so the whole thing can be traced, audited in the post-mortem, and priced. And a reliability layer (L8) keeps each step degrading to slower-but-correct.</p>
+
+<p>Now ask: how many databases does this need? We have memory, truth, and time. The naive answer is three durable stores. Part II interrogates that answer — and arrives at one.</p>
+
+<div class="ledger">
+  <h4>Running Ledger — what Part I has built</h4>
+  <table>
+  <tr><td><strong>L0</strong></td><td>A <strong>selective, high-value posture</strong>: reclaim scarce on-call attention.</td></tr>
+  <tr><td><strong>L1</strong></td><td>The <strong>four specialist concerns</strong>: symptoms, change, metrics, comms — born from how a human triages.</td></tr>
+  <tr><td><strong>L2</strong></td><td>An <strong>ingress trigger</strong> and the <strong>Finding contract</strong> with confidence, evidence, and rationale.</td></tr>
+  <tr><td><strong>L3</strong></td><td><strong>Parallel specialists</strong>, not a single prompt — the agentic fan-out.</td></tr>
+  <tr><td><strong>L4</strong></td><td>A <strong>retrieval + tools layer</strong>: ground every specialist in runbooks + live state.</td></tr>
+  <tr><td><strong>L5</strong></td><td><strong>Three stored shapes + one live layer</strong>: vector (semantic), relational (episodic), structured (procedural), tools (live-state).</td></tr>
+  <tr><td><strong>L6</strong></td><td>An <strong>events spine</strong>: every action a time-ordered row, feeding trace + audit + cost.</td></tr>
+  <tr><td><strong>L7</strong></td><td>A <strong>two-layer HITL gate</strong>: confidence-weighted for read-only; hard human approval for all writes.</td></tr>
+  <tr><td><strong>L8</strong></td><td>A <strong>reliability layer</strong>: timeouts, circuit breakers, idempotency, dead-letter, priority queue.</td></tr>
+  <tr><td><strong>L9</strong></td><td>The assembled <strong>mental model</strong> — and the open question: how many databases?</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Part II · From Principles to Data</div>
+  <h2>Why one Postgres, not three databases</h2>
+  <div class="part-tagline">Vector, relational, and time-series in one spine.</div>
+</div>
+
+<p>This is the heart of the data design. The agent needs runbook memory, durable triage truth, and a time-ordered trail of what every specialist did. The reflex is to buy one database for each need — Qdrant for vectors, plain Postgres for triage records, Timescale or ClickHouse for events. This part slows that reflex down and asks a simpler question: can one Postgres-compatible store carry all three shapes without making the system harder to understand?</p>
+
+<div class="driving">
+  Most AI systems split memory, truth, and time across separate databases. What if one is enough — and clearer?
+</div>
+
+<div class="eyebrow accent">2.1</div>
+<h3>Three Data Shapes, One Reflex</h3>
+
+<p>Do not start by naming databases. Start by naming what the product has to remember.</p>
+
+<p>The agent has three stored data shapes. First, <strong>memory</strong>: chunks of runbooks, past post-mortems, and service documentation that help the agent understand a new alert. Second, <strong>truth</strong>: the triage record, the findings, the incident-channel post ID, and any human decision or override. Third, <strong>time</strong>: every span, LLM call, tool call, cost, latency, and decision in the order it happened.</p>
+
+<p>There is also one reflex that makes the system feel simple: <strong>read before action, write after action</strong>. Before the agent speaks, fetch relevant runbook memory and live tool data. After the agent acts, write the triage truth and the event trail.</p>
+
+<p>The naive architecture maps each shape to a purpose-built store. Qdrant for vectors, plain Postgres for triage records, ClickHouse for events. Redis still sits alongside for the queue and orchestrator checkpoints.</p>
+
+<table>
+<thead><tr><th>Data shape</th><th>Reflexive store</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td>Memory</td><td>Qdrant</td><td>Embedded runbook + post-mortem chunks for semantic retrieval</td></tr>
+<tr><td>Truth</td><td>Postgres</td><td>Triage runs, findings, HITL rows, incident-channel IDs</td></tr>
+<tr><td>Time</td><td>ClickHouse or Timescale</td><td>Spans, LLM calls, tool calls, cost, latency</td></tr>
+</tbody>
+</table>
+
+<p>That sounds clean until you ask one product question: "For this triage run, what runbooks did we retrieve, what diagnosis did we produce, and which model calls made it expensive?" With three stores, the app has to query three systems and stitch the answer together in application code. That is the cost: more connection pools, more backups, more failure modes, and no simple joins.</p>
+
+<div class="question-block">
+  <div class="label">The question we ask</div>
+  <p>Can we keep the three shapes, but not split them across three durable databases?</p>
+  <p><em>Generalizes to:</em> any system tempted to add a new datastore per feature. The right first move is not "which database is popular?" It is "what shape is this data, and does the current store already handle it well enough?"</p>
+</div>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>Three shapes, one reflex.</strong> Memory, truth, and time are requirements. Separate databases are only an implementation choice. The next section asks whether Postgres with the right extensions can carry all three.</p>
+</div>
+
+<div class="eyebrow accent">2.2</div>
+<h3>One Store, Not Three</h3>
+
+<p>The key sentence is: <strong>Postgres with the missing powers added</strong>. Managed Postgres with three extensions handles all three shapes. This is not "one database is better than three" as a dogma. It is: one durable data spine, until a shape proves it cannot live there.</p>
+
+<p>Plain Postgres already handles the truth lane well: triage rows, finding rows, foreign keys, transactions, and normal SQL. To absorb the other lanes, it needs three additions. Each addition has a simple job.</p>
+
+<h4>1. Vector search for memory — pgvector + pgvectorscale</h4>
+<p>Runbooks and past post-mortems get turned into embeddings — 256-dimensional vectors of numbers. Semantically similar content gets similar vectors. <code>pgvector</code> stores that list in a real Postgres column. <code>pgvectorscale</code> adds a DiskANN index so lookups stay fast into the millions of chunks. When a new alert fires, the agent embeds the alert-plus-context and asks Postgres: <em>which stored runbook chunks are closest?</em></p>
+
+<h4>2. Time-series storage for the events spine — TimescaleDB</h4>
+<p>Every agent event has a timestamp and is naturally time-ordered. A TimescaleDB <strong>hypertable</strong> partitions the events table by time behind the scenes — recent chunks stay hot, old chunks compress. To the application it still looks like one table.</p>
+
+<h4>3. Rollups for dashboards and budget checks — continuous aggregates</h4>
+<p>A dashboard should not count raw events from scratch every time it loads. A <strong>continuous aggregate</strong> is a summary table Postgres keeps updated: cost per specialist per minute, p95 latency, tokens per triage. The BudgetGuard reads the summary first — if today's spend is already above the daily cap, it hard-blocks before the next LLM call.</p>
+
+<div class="callout thick">
+  Redis stays. The Redis queue and orchestrator checkpoints are short-lived, high-churn workloads. They do not want vector search or hypertables. "One database" here means one <em>durable data spine</em>, not forcing every workload into SQL.
+</div>
+
+<div class="eyebrow accent">2.3</div>
+<h3>The Three Lanes, in Real Schema</h3>
+
+<p>"One database" does not mean one giant table. It means the same database holds different table shapes for different jobs. Here are the actual DDL sketches for the three lanes.</p>
+
+<h4>Lane 1 — Memory: <code>knowledge_chunks</code></h4>
+<p>Runbook and post-mortem chunks live here. An ingestion job (Part IV, Phase 14) chunks each markdown document, embeds each chunk, and writes it. At triage time, the retrieval layer queries this table to find context relevant to the alert.</p>
+
+<pre><code>CREATE TABLE knowledge_chunks (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type  TEXT         NOT NULL,         -- runbook | postmortem | arch_doc
+    source_id    TEXT         NOT NULL,         -- doc path or ID
+    service      TEXT,                          -- owning service (nullable)
+    chunk_index  INT          NOT NULL,
+    content      TEXT         NOT NULL,
+    embedding    VECTOR(256)  NOT NULL,
+    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX knowledge_chunks_emb_idx
+    ON knowledge_chunks USING diskann (embedding vector_cosine_ops);
+
+ALTER TABLE knowledge_chunks
+    ADD COLUMN content_tsv TSVECTOR
+    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+CREATE INDEX knowledge_chunks_fts_idx
+    ON knowledge_chunks USING GIN (content_tsv);</code></pre>
+
+<p>Vector search catches meaning; full-text search catches exact names like service names, error codes, and config keys. The retrieval layer uses both and merges by reciprocal rank fusion.</p>
+
+<h4>Lane 2 — Time: <code>agent_events</code></h4>
+<p>Every agent action becomes one append-only row: span starts, span ends, LLM calls, tool calls, decisions, escalations, cost, latency, payload.</p>
+
+<pre><code>CREATE TABLE agent_events (
+    ts            TIMESTAMPTZ  NOT NULL,
+    triage_id     UUID         NOT NULL,
+    specialist    TEXT         NOT NULL,   -- symptoms|change|metrics|comms|aggregator
+    span_id       UUID         NOT NULL DEFAULT gen_random_uuid(),
+    parent_span   UUID,
+    event_type    TEXT         NOT NULL,   -- span.start|span.end|llm.call|tool.call|decision
+    model         TEXT,
+    tool_name     TEXT,
+    tokens_in     INT,
+    tokens_out    INT,
+    cost_usd      NUMERIC(10,6),
+    latency_ms    INT,
+    outcome       TEXT,
+    confidence    NUMERIC(4,3),
+    payload       JSONB
+);
+
+SELECT create_hypertable('agent_events', by_range('ts', INTERVAL '1 day'));</code></pre>
+
+<h4>Lane 3 — Truth: relational triage tables</h4>
+<p>Deliberately ordinary. <code>triage_runs</code> for one row per triage, <code>findings</code> for one row per finding, <code>hitl_approvals</code> for human decisions on write-actions, <code>hitl_feedback</code> for post-triage overrides. Standard relational shape because the data is standard relational data.</p>
+
+<div class="carry">
+  <div class="label">Carry into the architecture</div>
+  <p><strong>One Postgres-compatible data spine.</strong> Managed Postgres (Timescale Cloud, Neon with pgvector, or self-hosted with the extensions) carries memory with pgvector/pgvectorscale, time with hypertables and continuous aggregates, and truth with normal relational tables. Redis stays for the queue and orchestrator checkpoints.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Part III · The Architecture, Assembled</div>
+  <h2>Now, and only now, the boxes</h2>
+  <div class="part-tagline">Every box was earned in Parts I and II.</div>
+</div>
+
+<p>Every box below was earned in Parts I and II. As each section opens, it names the principle it fell out of. The diagrams are the carried pieces, drawn. Nothing here is new — it is the reasoning model made concrete, in the JVM stack.</p>
+
+<div class="eyebrow accent">3.1</div>
+<h3>Ingress &amp; the Queue</h3>
+
+<p>From the ingress trigger and the decoupling we carried at L2 and L8: a PagerDuty webhook arrives, is validated, and is enqueued — never handled inline.</p>
+
+<p>The ingress handler is a Spring Boot <code>@RestController</code> at <code>/webhooks/pagerduty</code>. It does exactly three things. It verifies the PagerDuty <strong>HMAC-SHA256 signature</strong> on the payload, rejecting forgeries before any work. It checks the <strong>idempotency key</strong> (<code>incident_id</code> + payload hash) so a retried delivery is acknowledged and dropped rather than triaged twice — the idempotency defense from L8. Then it <strong>enqueues</strong> the triage job to Redis (via Spring Data Redis + a lightweight consumer worker) and returns <code>200</code> immediately. PagerDuty expects a fast acknowledgment; the heavy work happens asynchronously in a worker.</p>
+
+<div class="ascii-diagram">    PagerDuty
+        │
+        ▼  webhook POST /webhooks/pagerduty
+  ┌─────────────────────────────┐
+  │  INGRESS  (Spring @RestCtl) │
+  │  · HMAC verify              │
+  │  · idempotency check        │
+  │  · enqueue(TriageJob)       │───► 200 OK (acknowledge fast)
+  └──────────────┬──────────────┘
+                 │
+                 ▼
+        ┌────────────────┐
+        │  Redis queue   │
+        │  (Streams)     │
+        └────────┬───────┘
+                 │
+                 ▼
+  ┌─────────────────────────────┐
+  │  ORCHESTRATOR WORKER         │
+  │  (Java thread pool)          │
+  │  · LangChain4j fan-out       │
+  │  · specialists in parallel   │
+  │  · aggregator                │
+  │  · HITL gate                 │
+  │  · post to Slack             │
+  └─────────────────────────────┘</div>
+<div class="diagram-caption">Ingress validates and enqueues; the worker drives the orchestrator; the result posts to the incident Slack channel via the HITL gate.</div>
+
+<div class="callout">
+  <strong>Why not handle inline?</strong> A slow LLM provider or a crashed orchestrator would make the webhook endpoint time out. PagerDuty then retries. Retries without idempotency cause duplicate triage. The queue is not just about performance — it is a correctness boundary.
+</div>
+
+<div class="eyebrow accent">3.2</div>
+<h3>The Orchestrator</h3>
+
+<p>From the parallel-specialists fan-out we carried at L3: the orchestrator is a graph, not a pipeline. Specialists run simultaneously; state is checkpointed between them.</p>
+
+<p>The orchestration is built on <strong>LangChain4j</strong>'s workflow primitives, with a small custom graph layer for the parallel fan-out. A typed <code>TriageState</code> object flows through the graph. State is <strong>checkpointed to Redis</strong> at each node boundary, so a worker crash mid-triage resumes from the last completed node rather than restarting from the alert. The checkpoint store is the same Redis the queue uses — one fewer dependency.</p>
+
+<p>The graph lives in the <code>orchestrator</code> package: <code>TriageGraph.java</code> wires the parallel fan-out and the aggregator join, <code>TriageState.java</code> defines the typed state, <code>Nodes.java</code> holds the node functions (<code>buildContext</code>, the four specialist nodes, <code>aggregate</code>). Each node has a <strong>timeout</strong> (default 30 seconds for tool-calling specialists, 45 for LLM-heavy ones). The aggregator is wired to run only after all four specialists complete <em>or</em> hit their timeout — this is the orchestration-deadlock defense from L8. A stalled Prometheus query cannot hang the whole triage forever.</p>
+
+<div class="callout thick">
+  <strong>Why not Temporal?</strong> Temporal would be more durable and would scale better. But it is a separate service, a separate worker pool, and meaningful ops overhead for a system that must be operable by one engineer. The design puts the orchestrator behind a narrow <code>WorkflowEngine</code> interface — swap the LangChain4j implementation for a Temporal one when scale demands it, without changing any specialist code.
+</div>
+
+<div class="eyebrow accent">3.3</div>
+<h3>Specialists &amp; the Aggregator</h3>
+
+<p>From the four concerns we carried at L1 and the Finding contract from L2: four specialists run in parallel, each returning structured findings, merged by one aggregator.</p>
+
+<p>The four specialists — <code>SymptomsSpecialist</code>, <code>ChangeSpecialist</code>, <code>MetricsSpecialist</code>, <code>CommsSpecialist</code> — share a base shape in <code>BaseSpecialist.java</code> (BudgetGuard check, retrieval call, tool calls, LLM call, event emission, error handling) and differ only in their domain prompt, their tool set, and their post-processing. Each returns a list of <strong>Finding</strong> objects (defined in <code>Finding.java</code>) matching the L2 contract: <code>agentType</code>, <code>severity</code>, <code>category</code>, <code>service</code>, <code>timestamp</code>, <code>evidenceUrl</code>, <code>confidence</code>, <code>rationale</code>.</p>
+
+<p>Structured output is what makes the next step deterministic — the aggregator merges <em>data</em>, not prose. LangChain4j's structured-output support (via JSON schema constraints + validation) makes this reliable in Java in a way it was not two years ago.</p>
+
+<h4>The tool scoping matters</h4>
+<p>Each specialist has a restricted tool set (from L4 grounding + L7 HITL). The symptoms specialist gets read-only log and error-rate tools. The change specialist gets read-only deploy-history and feature-flag tools. The metrics specialist gets read-only Prometheus/Datadog query tools. The comms specialist has <em>no external tools</em> — it only reads the other specialists' findings and drafts the Slack + status-page text. <strong>No specialist has write tools.</strong> Write actions (rollback, restart, scale) are surfaced as suggestions in the aggregator's output and require HITL approval.</p>
+
+<p>The aggregator merges all four lists, deduplicates findings that multiple specialists raised on the same service and timestamp (keeping the highest-confidence one and boosting confidence when specialists agree), computes an <code>overall_confidence</code>, and applies the L7 HITL gate: post read-only analysis to Slack when confident, tag as low-confidence when not, and route any suggested write-action to the human approval queue.</p>
+
+<div class="ascii-diagram">                    TriageGraph  (LangChain4j)
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼         ▼
+   ┌─────────┐        ┌─────────┐         ┌─────────┐  ┌──────┐
+   │symptoms │        │ change  │         │ metrics │  │comms │
+   │Special- │        │Special- │         │Special- │  │Spec- │
+   │  ist    │        │  ist    │         │  ist    │  │ ialist│
+   └────┬────┘        └────┬────┘         └────┬────┘  └──┬───┘
+        │                  │                   │           │
+        └──────────┬───────┴─────────┬─────────┴───────────┘
+                   ▼                 ▼
+             ┌────────────────────────┐
+             │       AGGREGATOR       │
+             │  · merge + dedup       │
+             │  · agreement score     │
+             │  · overall confidence  │
+             └──────────┬─────────────┘
+                        │
+                        ▼
+             ┌────────────────────────┐
+             │      HITL GATE         │
+             │  · read-only → Slack   │
+             │  · writes → approval Q │
+             └────────────────────────┘</div>
+<div class="diagram-caption">Fan-out to four specialists in parallel; aggregator merges and dedups; HITL gate routes read-only vs write actions.</div>
+
+<div class="eyebrow accent">3.4</div>
+<h3>The Retrieval Path</h3>
+
+<p>From the grounding problem at L4 and the data shapes at L5: each specialist queries the vector lane for runbook context relevant to the alert. Retrieval is hybrid — vector and keyword in parallel, merged by reciprocal rank fusion.</p>
+
+<p>The retrieval layer lives in the <code>memory</code> package: <code>KnowledgeRetriever.java</code>, <code>Embedder.java</code> (calling OpenAI or a self-hosted embedding model via LangChain4j), and <code>HybridSearch.java</code>. Pure vector search finds meaning but misses exact identifiers; pure keyword search finds exact strings but misses semantic relevance. The layer runs both against <code>knowledge_chunks</code>: DiskANN ANN search over the 256-dim embeddings, and full-text search over the <code>content_tsv</code> GIN index. RRF merges the two result sets and returns the top-k chunks into the specialist's prompt.</p>
+
+<div class="eyebrow accent">3.5</div>
+<h3>The Events Spine in Operation</h3>
+
+<p>From the trust-and-proof principle at L6: every action is one row in <code>agent_events</code>, and three consumers read that one table.</p>
+
+<p>The observability layer (<code>EventEmitter.java</code>, <code>Tracing.java</code>, <code>AuditReader.java</code>) emits an event for every span, LLM call, tool call, and decision, carrying the <code>span_id</code>/<code>parent_span</code> chain, cost, latency, confidence, and outcome. The <strong>trace viewer</strong> reconstructs any triage with <code>SELECT * FROM agent_events WHERE triage_id = ? ORDER BY ts</code>. The <strong>audit trail</strong> is the same append-only table, immutable by construction — critical for post-mortems. The <strong>cost ledger</strong> reads the continuous aggregates — and so does the <code>BudgetGuard</code>, which reads the day's running cost at the top of every specialist run and hard-blocks before any LLM call if the daily cap is exceeded.</p>
+
+<div class="eyebrow accent">3.6</div>
+<h3>The Full System</h3>
+
+<div class="ascii-diagram">   PagerDuty ──► Spring Boot ingress ──► Redis queue ──► Worker
+                                                            │
+                                                            ▼
+                                          ┌─────────────────────────────┐
+                                          │    TriageGraph (LangChain4j)│
+                                          │                              │
+                                          │   symptoms  change           │
+                                          │       │       │              │
+                                          │   metrics  comms             │
+                                          │       │       │              │
+                                          │       └───┬───┘              │
+                                          │           ▼                  │
+                                          │       aggregator             │
+                                          │           │                  │
+                                          │           ▼                  │
+                                          │       HITL gate              │
+                                          └───────────┬──────────────────┘
+                                                      │
+                                    read-only ────────┼──────── write action
+                                          │                          │
+                                          ▼                          ▼
+                                       Slack                  approval queue
+                                                                     │
+                                                                     ▼
+                                                              human approves
+                                                                     │
+                                                                     ▼
+                                                           execute + audit
+
+  ─────────────── beneath all of it ───────────────
+     Postgres + pgvector + Timescale
+     · knowledge_chunks    (memory / RAG)
+     · triage_runs         (truth)
+     · findings            (truth)
+     · hitl_approvals      (truth)
+     · agent_events        (time / hypertable)
+     · agent_cost_1m       (rollups / continuous aggregate)
+  ──────────────────────────────────────────────────</div>
+<div class="diagram-caption">The full system. Ingress → Redis → Worker → LangChain4j fan-out → aggregator → HITL gate → Slack or approval queue. Postgres+extensions is the shared spine beneath every component.</div>
+
+<div class="carry">
+  <div class="label">Part III — carry forward</div>
+  <p>The reasoning model, now drawn: Ingress with HMAC + idempotency and Redis decoupling (L2, L8); LangChain4j fan-out with Redis checkpointing behind a <code>WorkflowEngine</code> interface (L3); four specialists returning <code>Finding</code>s, merged by the aggregator through the two-layer HITL gate (L1, L2, L7); hybrid DiskANN + FTS retrieval and the <code>agent_events</code> spine (L4, L5, L6), all on the one Postgres store from Part II.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Part IV · The Implementation Plan</div>
+  <h2>From design to code</h2>
+  <div class="part-tagline">The 20-phase roadmap and the module map.</div>
+</div>
+
+<p>The architecture is derived; now the build. This part enumerates what gets built, in what order, and how each step proves itself green before the next begins. No code is shown — this is the inventory and the sequence, so the full scope is visible before a line is written.</p>
+
+<div class="eyebrow accent">4.1</div>
+<h3>The 20-Phase Build Roadmap</h3>
+
+<p>The build follows the 0.4 lifecycle exactly. Each phase proves one thing, ends green, and has a written gate before the next starts.</p>
+
+<table>
+<thead><tr><th>#</th><th>Phase</th><th>What it proves / its green gate</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Cognitive Design</td><td>Autonomy level and HITL boundaries decided; write-action-never-autonomous rule documented</td></tr>
+<tr><td>1</td><td>System Architecture</td><td>Module graph and ADRs exist; dependency rule defined</td></tr>
+<tr><td>2</td><td>Frontend</td><td>Dashboard shell renders; incident timeline streams</td></tr>
+<tr><td>3</td><td>Backend &amp; API</td><td>Spring Boot up; webhook validates HMAC; idempotency holds</td></tr>
+<tr><td>4</td><td>Workflow Orchestration</td><td>LangChain4j fans out to 4 nodes in parallel; checkpoints resume</td></tr>
+<tr><td>5</td><td>LLM &amp; Reasoning</td><td>Model routing per specialist; prompt registry versioned</td></tr>
+<tr><td>6</td><td>Memory Architecture</td><td>RAG on pgvector/pgvectorscale; hybrid retrieval returns top-k</td></tr>
+<tr><td>7</td><td>Tooling &amp; Sandboxing</td><td>Tool registry enforces read-only scope; write-tools absent</td></tr>
+<tr><td>8</td><td>Multi-Agent Systems</td><td>4 specialists + contracts + aggregator produce one triage</td></tr>
+<tr><td>9</td><td>Evaluation</td><td>Golden incident dataset runs; LLM-as-judge scores; regression gate blocks</td></tr>
+<tr><td>10</td><td>Observability &amp; Tracing</td><td>Spans land in agent_events hypertable</td></tr>
+<tr><td>11</td><td>Security</td><td>Threat model written; RBAC enforced; audit trail immutable</td></tr>
+<tr><td>12</td><td>Reliability</td><td>Retries, circuit breakers, idempotency verified under fault injection</td></tr>
+<tr><td>13</td><td>Infrastructure</td><td>Postgres+extensions provisioned; Redis provisioned; Docker Compose runs</td></tr>
+<tr><td>14</td><td>Data Engineering</td><td>Runbook ingestion pipeline runs; hypertable schema designed and migrated</td></tr>
+<tr><td>15</td><td>Governance</td><td>Audit logs queryable; explainability per finding</td></tr>
+<tr><td>16</td><td>Economics &amp; Cost Control</td><td>Per-specialist cost via continuous aggregates; BudgetGuard hard-blocks</td></tr>
+<tr><td>17</td><td>Developer Experience</td><td>Prompt playground and trace viewer usable</td></tr>
+<tr><td>18</td><td>CI/CD for AI</td><td>Prompt versioning; eval gates; canary release path</td></tr>
+<tr><td>19</td><td>Human-in-the-Loop</td><td>Approval queue, escalation, dispute, feedback all wired</td></tr>
+<tr><td>20</td><td>Continuous Learning</td><td>Drift detection reads continuous aggregates; feedback loop closes</td></tr>
+</tbody>
+</table>
+<div class="table-caption">The build roadmap — phase, what it proves, its green gate.</div>
+
+<div class="eyebrow accent">4.2</div>
+<h3>The Module Map</h3>
+
+<p>Modular monolith. One Spring Boot process. Inward-only dependencies. Below is the full surface area so the scope is visible before the first commit.</p>
+
+<table>
+<thead><tr><th>Module</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>ingress/</code></td><td>Webhook controller, HMAC verifier, idempotency store, payload parser</td></tr>
+<tr><td><code>orchestrator/</code></td><td>TriageGraph, TriageState, node functions, LangChain4j engine impl</td></tr>
+<tr><td><code>specialists/</code></td><td>BaseSpecialist + four subclasses; Finding contract; JSON schema validation</td></tr>
+<tr><td><code>tools/</code></td><td>Tool registry, LogQueryTool, DeployHistoryTool, PrometheusTool, FeatureFlagTool — all read-only</td></tr>
+<tr><td><code>memory/</code></td><td>KnowledgeRetriever, Embedder, HybridSearch (DiskANN + FTS + RRF)</td></tr>
+<tr><td><code>aggregator/</code></td><td>Merge, dedup, agreement scoring, overall-confidence calc</td></tr>
+<tr><td><code>hitl/</code></td><td>Confidence gate, approval queue, escalation engine, feedback capture</td></tr>
+<tr><td><code>integrations/</code></td><td>Slack client, PagerDuty client, status-page client</td></tr>
+<tr><td><code>observability/</code></td><td>EventEmitter → agent_events hypertable; trace queries; alerting</td></tr>
+<tr><td><code>economics/</code></td><td>BudgetGuard; cost repository reading continuous aggregates</td></tr>
+<tr><td><code>reliability/</code></td><td>@Retryable wrappers, Resilience4j circuit breakers, timeouts, dead-letter</td></tr>
+<tr><td><code>security/</code></td><td>Prompt-injection guard, RBAC, secret masking, PII scrubber</td></tr>
+<tr><td><code>evaluation/</code></td><td>Golden incident dataset, LLM-as-judge, regression gate for CI</td></tr>
+<tr><td><code>prompts/</code></td><td>Versioned prompt registry per specialist</td></tr>
+<tr><td><code>database/</code></td><td>JPA entities, repositories, Flyway migrations</td></tr>
+<tr><td><code>api/</code></td><td>REST endpoints for triage, approvals, feedback, dashboard queries</td></tr>
+<tr><td><code>queue/</code></td><td>Redis Streams consumer, worker thread pool</td></tr>
+<tr><td><code>frontend/</code></td><td>Next.js dashboard: live triage timeline, HITL queue, trace viewer, economics view</td></tr>
+</tbody>
+</table>
+
+<div class="callout thick">
+  <strong>Read this as a contract.</strong> This is the exact code we will build, in this order, each phase ending green. The dependency rule holds throughout: outer modules depend inward only; <code>observability</code> is cross-cutting, injected as a Spring aspect. You can delete any outer module and the inner ones still compile.
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div class="part-header">
+  <div class="part-num">Closing</div>
+  <h2>How to reuse this</h2>
+  <div class="part-tagline">The architecture was the example. The method is the takeaway.</div>
+</div>
+
+<div class="eyebrow accent">5.1</div>
+<h3>The Transferable Framework</h3>
+
+<p>Collect the "question we ask" moves from the climb. None of them mention incident response. Each applies to whatever you build next.</p>
+
+<ol>
+<li><strong>Why does this system exist?</strong> Name the one scarcity it relieves, or do not build it.</li>
+<li><strong>What mature system already solved a version of this?</strong> Borrow its decomposition.</li>
+<li><strong>What is the precise trigger, output, and the object on the arrows?</strong> The contract matters more than the boxes.</li>
+<li><strong>What does the mature version decompose into?</strong> Find the hidden back half; stand on the highest rung you can afford.</li>
+<li><strong>What does this reasoner need that is not in front of it?</strong> Retrieve exactly that, and only that.</li>
+<li><strong>What distinct kinds of state, by access pattern?</strong> Kinds drive shapes; shapes drive stores. And some state is not stored at all — it is fetched live.</li>
+<li><strong>Can it prove how it got there, and what it cost?</strong> Design the audit stream with the decision, not after.</li>
+<li><strong>Where on the autonomy spectrum, and what signal moves a case along it?</strong> Let the system earn trust case by case — and where writes touch reality, keep the human always.</li>
+<li><strong>What happens when each box fails?</strong> Degrade to slower-but-correct, never fast-but-wrong.</li>
+<li><strong>Count the data shapes before the databases.</strong> One store until a shape proves it cannot live there.</li>
+<li><strong>Can the hard decision hide behind an interface?</strong> Make the cheap choice now; swap one file later.</li>
+</ol>
+
+<div class="callout thick">
+  Design is not a parts list. It is a chain of questions, each one earning the next box. If a component cannot be traced back to a question you can defend, it is either missing a justification or it does not belong.
+</div>
+
+<p>Notice that the most consequential architectural decision in this study — collapsing memory, truth, and time onto one Postgres spine — fell out of question ten, not out of a preference for any product. The store was derived, lane by lane, because the data shapes fit one Postgres-compatible database with the right extensions. That is the posture to carry: let the data shapes, the failure modes, and the proof requirement choose the architecture, and defend each choice on its merits.</p>
+
+<hr class="hairline deep">
+
+<div class="footer-note">
+  <strong>Pager</strong> — A first-principles architecture study for a Java-native AI Incident Response Agent.<br>
+  Built on Spring Boot 3, LangChain4j, PGVector, Timescale, Redis. Deployed via Docker + GitHub Actions.<br>
+  <br>
+  A portfolio piece for Applied AI Engineer / Founding Engineer / SRE-AI roles.<br>
+  Built by <strong>Sumit Uppal</strong> · Bengaluru, India · <a href="https://github.com/sumituppal">github.com/sumituppal</a>
+</div>
+
+</main>
+</body>
+</html>

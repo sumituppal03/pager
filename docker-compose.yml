@@ -1,0 +1,51 @@
+#
+# Local dev environment for Pager.
+#
+# Usage:
+#   docker compose up -d           # bring up Postgres + Redis
+#   docker compose down            # stop
+#   docker compose down -v         # stop and wipe data
+#
+# The Postgres image is `pgvector/pgvector`, which is stock Postgres
+# with the pgvector extension pre-installed. We enable it in the
+# init script.
+#
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pager-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pager
+      POSTGRES_USER: pager
+      POSTGRES_PASSWORD: pager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pager-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pager -d pager"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: pager-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - pager-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pager-pgdata:
+  pager-redisdata:

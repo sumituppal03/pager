@@ -1,0 +1,15 @@
+#
+# Test profile — no Redis in unit tests, Testcontainers for JPA tests
+#
+spring:
+  data:
+    redis:
+      url: redis://localhost:6379 # only used if a test opts in
+  flyway:
+    enabled: false # tests use ddl-auto=create-drop OR Testcontainers
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+pager:
+  pagerduty-webhook-secret: test-secret
