@@ -1,25 +1,31 @@
 package dev.sumituppal.pager;
 
+import dev.sumituppal.pager.observability.CorrelationIdFilter;
+import dev.sumituppal.pager.observability.CorrelationIdGenerator;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.test.context.ActiveProfiles;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The smoke test.
+ * Smoke tests.
  *
- * A test at this level exists for one reason: to prove that the
- * Spring ApplicationContext loads. If this fails, nothing else works.
- * It's the cheapest signal you can get that PR #01 is green.
+ * <p>Proves that the Spring ApplicationContext loads, the health endpoint
+ * responds, and — added in issue #2 — the correlation-ID filter stamps
+ * every response with an X-Correlation-Id header.
  *
- * We disable JPA + Flyway + Redis in the test profile so this can
- * pass without any external services — you can run `mvn test` on a
- * plane with no network.
+ * <p>We exclude JPA + Flyway + Redis autoconfigure so this can run in CI
+ * without any external services. Integration tests that need those come
+ * later, via Testcontainers.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
                 properties = {
@@ -44,18 +50,48 @@ class PagerApplicationTests {
     private int port;
 
     @Test
+    @DisplayName("Spring context loads")
     void contextLoads() {
-        // The presence of any bean proves the context wired up.
         assertThat(context.getBeanDefinitionCount()).isGreaterThan(0);
     }
 
     @Test
+    @DisplayName("/actuator/health responds UP")
     void healthEndpointIsUp() {
-        // /actuator/health should respond 200 with status UP even before we
-        // wire persistence. Docker's healthcheck depends on this.
         var response = rest.getForEntity(
             "http://localhost:" + port + "/actuator/health", String.class);
         assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(response.getBody()).contains("\"status\":\"UP\"");
+    }
+
+    @Test
+    @DisplayName("Every response carries a generated X-Correlation-Id when none is sent")
+    void correlationIdIsGeneratedWhenAbsent() {
+        var response = rest.getForEntity(
+            "http://localhost:" + port + "/actuator/health", String.class);
+
+        String correlationId = response.getHeaders().getFirst(CorrelationIdFilter.HEADER_NAME);
+        assertThat(correlationId).isNotBlank();
+        assertThat(CorrelationIdGenerator.isValid(correlationId))
+            .as("response header must be a valid correlation ID, got '%s'", correlationId)
+            .isTrue();
+    }
+
+    @Test
+    @DisplayName("A valid inbound X-Correlation-Id round-trips unchanged")
+    void correlationIdRoundTrips() {
+        String inbound = "req_TestId12345"; // valid format
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(CorrelationIdFilter.HEADER_NAME, inbound);
+        HttpEntity<Void> requestEntity = new HttpEntity<>(headers);
+
+        var response = rest.exchange(
+            "http://localhost:" + port + "/actuator/health",
+            HttpMethod.GET,
+            requestEntity,
+            String.class);
+
+        assertThat(response.getHeaders().getFirst(CorrelationIdFilter.HEADER_NAME))
+            .isEqualTo(inbound);
     }
 }
