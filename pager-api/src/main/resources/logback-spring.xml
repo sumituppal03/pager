@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logback configuration for Pager.
+
+    Two profiles:
+      - default (dev) — human-readable, colored console output including the
+        correlation ID inline
+      - "prod" — structured JSON via logstash-logback-encoder, ready for
+        Loki / Datadog / ELK ingest
+
+    The correlation ID is pulled from SLF4J MDC via %X{correlationId} in the
+    dev pattern, and via the "customFields" logic in the JSON encoder for prod.
+
+    springProfile blocks are how you switch behavior per Spring profile from
+    Logback config — the equivalent of application-prod.yml but for logging.
+-->
+<configuration>
+
+    <springProperty scope="context" name="appName" source="spring.application.name" defaultValue="pager"/>
+
+    <!-- ============================================================ -->
+    <!-- Dev profile (or no profile) — human-readable, colored         -->
+    <!-- ============================================================ -->
+    <springProfile name="!prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <!--
+                    %X{correlationId:-} pulls the correlation ID from MDC.
+                    The :- fallback shows a blank if no ID is set (e.g. for
+                    startup logs before the filter has run on any request).
+                -->
+                <pattern>
+                    %cyan(%d{HH:mm:ss.SSS}) %highlight(%-5level) %magenta([%X{correlationId:-}]) %green([%thread]) %yellow(%logger{40}) - %msg%n
+                </pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+
+        <logger name="dev.sumituppal.pager" level="DEBUG"/>
+    </springProfile>
+
+    <!-- ============================================================ -->
+    <!-- Prod profile — structured JSON, one line per log event         -->
+    <!-- ============================================================ -->
+    <springProfile name="prod">
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!--
+                    Include MDC fields at the top level of the JSON payload,
+                    so { "correlationId": "req_abc123" } is directly queryable
+                    in the log aggregator without unpacking a nested object.
+                -->
+                <includeMdcKeyName>correlationId</includeMdcKeyName>
+                <customFields>{"service":"${appName}"}</customFields>
+                <fieldNames>
+                    <timestamp>ts</timestamp>
+                    <message>msg</message>
+                    <thread>thread</thread>
+                    <logger>logger</logger>
+                    <level>level</level>
+                    <levelValue>[ignore]</levelValue>
+                    <version>[ignore]</version>
+                </fieldNames>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+
+        <logger name="dev.sumituppal.pager" level="INFO"/>
+    </springProfile>
+
+</configuration>
