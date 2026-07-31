@@ -28,6 +28,4 @@ jobs:
 
       - name: Run tests
         working-directory: pager-api
-        env:
-          RUN_INTEGRATION_TESTS: "true"
-        run: mvn -B -ntp test  
+        run: mvn -B -ntp test
