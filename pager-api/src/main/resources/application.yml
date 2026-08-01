@@ -99,6 +99,7 @@ pager:
   daily-budget-usd: ${PAGER_DAILY_BUDGET_USD:20.00}
 
   # Webhook security
+  queue-name: pager.triage.queue
   pagerduty-webhook-secret: ${PAGER_PAGERDUTY_WEBHOOK_SECRET:dev-only-change-me}
 
 # ------------------------------------------------------------------

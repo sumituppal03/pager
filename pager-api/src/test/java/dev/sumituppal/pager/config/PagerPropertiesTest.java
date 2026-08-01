@@ -22,20 +22,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * runs at production startup.
  *
  * <p>We use {@code hasStackTraceContaining} rather than {@code hasMessageContaining}
- * because Spring wraps the validation failure like this:
- * <pre>
- *   BeanCreationException            ← top-level, generic message
- *     └─ BindException               ← Spring Boot binding wrapper
- *          └─ BindValidationException ← "here are the field errors"
- *               └─ ConstraintViolation ← "confidence-autopost-threshold must be <= 1.0"
- * </pre>
- * The field names we care about live in that innermost layer.
- * {@code hasStackTraceContaining} walks the full chain of causes.
+ * because Spring wraps the validation failure in a chain of exceptions
+ * and the field names live in the innermost {@code ConstraintViolation}.
  *
  * <p>We deliberately do <em>not</em> use {@code @SpringBootApplication}
- * or {@code @SpringBootTest}. Those pull in the full autoconfigure
- * pipeline (JPA, Redis, web server) which would require live services
- * to run. A configuration test should have zero external dependencies.
+ * or {@code @SpringBootTest} — those pull in JPA/Redis/web autoconfigure
+ * which would require live services. Configuration binding needs neither.
  */
 class PagerPropertiesTest {
 
@@ -50,6 +42,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-real-secret-value")) {
 
             PagerProperties props = ctx.getBean(PagerProperties.class);
@@ -61,6 +54,7 @@ class PagerPropertiesTest {
             assertThat(props.models().quality()).isEqualTo("gpt-4o");
             assertThat(props.models().embed()).isEqualTo("text-embedding-3-small");
             assertThat(props.dailyBudgetUsd()).isEqualByComparingTo("20.00");
+            assertThat(props.queueName()).isEqualTo("pager.triage.queue");
             assertThat(props.pagerdutyWebhookSecret()).isEqualTo("some-real-secret-value");
         }
     }
@@ -76,6 +70,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret="))
             .hasStackTraceContaining("pagerduty-webhook-secret");
     }
@@ -91,6 +86,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-secret"))
             .hasStackTraceContaining("confidence-autopost-threshold");
     }
@@ -106,6 +102,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-secret"))
             .hasStackTraceContaining("confidence-autopost-threshold");
     }
@@ -121,6 +118,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-secret"))
             .hasStackTraceContaining("specialist-timeout-ms");
     }
@@ -136,6 +134,7 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=0",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-secret"))
             .hasStackTraceContaining("daily-budget-usd");
     }
@@ -151,8 +150,25 @@ class PagerPropertiesTest {
             "pager.models.quality=gpt-4o",
             "pager.models.embed=text-embedding-3-small",
             "pager.daily-budget-usd=20.00",
+            "pager.queue-name=pager.triage.queue",
             "pager.pagerduty-webhook-secret=some-secret"))
             .hasStackTraceContaining("models.fast");
+    }
+
+    @Test
+    @DisplayName("blank queue name fails startup")
+    void blankQueueNameFails() {
+        assertThatThrownBy(() -> boot(
+            "pager.confidence-autopost-threshold=0.75",
+            "pager.specialist-timeout-ms=45000",
+            "pager.tool-call-timeout-ms=15000",
+            "pager.models.fast=gpt-4o-mini",
+            "pager.models.quality=gpt-4o",
+            "pager.models.embed=text-embedding-3-small",
+            "pager.daily-budget-usd=20.00",
+            "pager.queue-name=",
+            "pager.pagerduty-webhook-secret=some-secret"))
+            .hasStackTraceContaining("queue-name");
     }
 
     // ─────────────────────────────────────────────────────────────
