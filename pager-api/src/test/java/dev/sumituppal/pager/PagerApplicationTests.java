@@ -1,14 +1,17 @@
 package dev.sumituppal.pager;
 
+import dev.sumituppal.pager.domain.TriageRunRepository;
 import dev.sumituppal.pager.observability.CorrelationIdFilter;
 import dev.sumituppal.pager.observability.CorrelationIdGenerator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -20,12 +23,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Smoke tests.
  *
  * <p>Proves that the Spring ApplicationContext loads, the health endpoint
- * responds, and — added in issue #2 — the correlation-ID filter stamps
- * every response with an X-Correlation-Id header.
+ * responds, and the correlation-ID filter stamps every response.
  *
  * <p>We exclude JPA + Flyway + Redis autoconfigure so this can run in CI
- * without any external services. Integration tests that need those come
- * later, via Testcontainers.
+ * without any external services. But we still need bean stubs for the
+ * few components ({@link WebhookIngressService}, {@link TriageQueueProducer})
+ * that depend on {@link TriageRunRepository} and {@link RedisTemplate} —
+ * hence the {@link MockBean} declarations below.
+ *
+ * <p>Integration tests that actually exercise those beans use Testcontainers
+ * and live in the {@code domain} package.
+ *
+ * <p>TODO(post-MVP): Split this into {@code @WebMvcTest} slices for the
+ * filter and a proper {@code @SpringBootTest} for the full ingress path.
+ * Right now the goal is minimum ceremony to keep this smoke test running
+ * as we add more beans.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
                 properties = {
@@ -48,6 +60,23 @@ class PagerApplicationTests {
 
     @LocalServerPort
     private int port;
+
+    /**
+     * JPA autoconfigure is excluded, so no repository beans get created.
+     * WebhookIngressService needs this to be constructable — provide a mock.
+     */
+    @MockBean
+    private TriageRunRepository triageRunRepository;
+
+    /**
+     * Redis autoconfigure is excluded, so no RedisTemplate beans get created.
+     * TriageQueueProducer needs a RedisTemplate<String, TriageJob> — provide a mock.
+     * The raw type is intentional: MockBean's type-based matching finds it
+     * regardless of the generic parameters at injection sites.
+     */
+    @MockBean(name = "triageQueueTemplate")
+    @SuppressWarnings("rawtypes")
+    private RedisTemplate redisTemplate;
 
     @Test
     @DisplayName("Spring context loads")

@@ -16,7 +16,7 @@ import java.math.BigDecimal;
  *
  * <p>Backed by the {@code pager.*} keys in application.yml. Every field is
  * validated on startup — a bad or missing value fails the boot immediately
- * with a clear message, rather than surfacing hours later as a mystery
+ * with a clear message, rather than surfacing hours later as a mysterious
  * production incident.
  *
  * <p>Bind to environment variables via Spring's relaxed binding:
@@ -35,6 +35,9 @@ import java.math.BigDecimal;
  * @param models                       LLM model routing — see {@link Models}.
  * @param dailyBudgetUsd               If the day's spend exceeds this,
  *                                     BudgetGuard blocks new specialist runs.
+ * @param queueName                    Redis list key used as the triage-job
+ *                                     work queue. Producers LPUSH here;
+ *                                     the worker BRPOPs from the other end.
  * @param pagerdutyWebhookSecret       Shared secret for HMAC verification of
  *                                     inbound PagerDuty webhooks.
  */
@@ -60,6 +63,9 @@ public record PagerProperties(
     @NotNull
     @DecimalMin(value = "0.0", inclusive = false, message = "daily-budget-usd must be > 0")
     BigDecimal dailyBudgetUsd,
+
+    @NotBlank(message = "queue-name must not be blank")
+    String queueName,
 
     @NotBlank(message = "pagerduty-webhook-secret must not be blank — set PAGER_PAGERDUTY_WEBHOOK_SECRET")
     String pagerdutyWebhookSecret
