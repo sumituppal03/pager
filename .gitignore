@@ -45,3 +45,5 @@ logs/
 # Node (in frontend/ later)
 node_modules/
 .next/
+
+send-webhook.ps1

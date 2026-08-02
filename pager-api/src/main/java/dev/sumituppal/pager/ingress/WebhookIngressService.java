@@ -1,6 +1,5 @@
 package dev.sumituppal.pager.ingress;
 
-import java.io.IOException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.sumituppal.pager.config.PagerProperties;
 import dev.sumituppal.pager.domain.Severity;
@@ -13,7 +12,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.io.IOException;
 import java.util.Optional;
 
 /**
@@ -26,8 +28,8 @@ import java.util.Optional;
  *   <li>Compute the idempotency key from {@code sha256(incidentId, payload)}.</li>
  *   <li>Check for an existing triage with that key — if found, return
  *       {@link Result.Duplicate}. This is the fast path.</li>
- *   <li>Otherwise insert a new {@code triage_runs} row and enqueue a
- *       job to Redis, returning {@link Result.Accepted}.</li>
+ *   <li>Otherwise insert a new {@code triage_runs} row and (after commit)
+ *       enqueue a job to Redis, returning {@link Result.Accepted}.</li>
  * </ol>
  *
  * <p><strong>Race condition handling</strong>: two concurrent identical
@@ -37,6 +39,17 @@ import java.util.Optional;
  * which we treat as a late-arriving duplicate. This makes the check
  * <em>optimistic</em>: the fast path (existing row) is a cheap SELECT;
  * the correctness guarantee is at the DB level.
+ *
+ * <p><strong>Transactional outbox</strong>: the Redis enqueue is deferred
+ * to {@code afterCommit} of the current DB transaction. If we enqueued
+ * inline, the worker on its own connection could read the Redis job in
+ * milliseconds — before our transaction commits — and its lookup of the
+ * triage row would miss because the INSERT isn't yet visible on other
+ * connections. Using {@link TransactionSynchronizationManager} guarantees
+ * the enqueue runs exactly after the DB has durably committed. If the
+ * transaction rolls back for any reason, the enqueue never runs — which
+ * is correct: we don't want a triage job in Redis pointing at a row that
+ * doesn't exist.
  */
 @Service
 public class WebhookIngressService {
@@ -105,14 +118,36 @@ public class WebhookIngressService {
             return new Result.Duplicate(existing.get().getId());
         }
 
-        // Step 5 — insert + enqueue.
+        // Step 5 — insert, then enqueue after the DB commits.
+        //
+        // The enqueue MUST happen after the DB commit, not inside the transaction.
+        // If we enqueue inline, the worker on its own connection reads the Redis
+        // job in milliseconds — before our transaction commits — and its lookup
+        // of the triage row misses because the INSERT isn't yet visible on other
+        // connections. Result: "row not found — dropping."
+        //
+        // TransactionSynchronization.afterCommit runs the enqueue exactly once,
+        // exactly after the DB has durably committed. If the transaction rolls
+        // back for any reason, the enqueue never runs — which is correct: we
+        // don't want a triage job in Redis pointing at a row that doesn't exist.
         TriageRun run = buildTriageRun(payload, rawBody, key);
         try {
             TriageRun saved = triageRuns.save(run);
-            queue.enqueue(TriageJob.firstAttempt(saved.getId(), payload.incidentId()));
+            final String triageId = saved.getId();
+            final String incidentId = payload.incidentId();
+
+            TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        queue.enqueue(TriageJob.firstAttempt(triageId, incidentId));
+                    }
+                }
+            );
+
             log.info("accepted webhook — triage {} for incident {}",
-                    saved.getId(), payload.incidentId());
-            return new Result.Accepted(saved.getId());
+                    triageId, incidentId);
+            return new Result.Accepted(triageId);
         } catch (DataIntegrityViolationException e) {
             // Race with a concurrent identical webhook — the other one
             // won the insert. Treat as duplicate.

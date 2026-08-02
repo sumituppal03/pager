@@ -1,5 +1,7 @@
 package dev.sumituppal.pager;
 
+import dev.sumituppal.pager.worker.TriageWorker;
+import dev.sumituppal.pager.worker.TriageOrchestrator;
 import dev.sumituppal.pager.domain.TriageRunRepository;
 import dev.sumituppal.pager.observability.CorrelationIdFilter;
 import dev.sumituppal.pager.observability.CorrelationIdGenerator;
@@ -67,6 +69,12 @@ class PagerApplicationTests {
      */
     @MockBean
     private TriageRunRepository triageRunRepository;
+
+    @MockBean
+    private TriageWorker triageWorker;
+
+    @MockBean
+    private TriageOrchestrator triageOrchestrator;
 
     /**
      * Redis autoconfigure is excluded, so no RedisTemplate beans get created.
