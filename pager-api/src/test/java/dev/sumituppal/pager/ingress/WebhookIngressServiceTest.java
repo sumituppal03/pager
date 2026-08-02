@@ -6,10 +6,13 @@ import dev.sumituppal.pager.domain.TriageRun;
 import dev.sumituppal.pager.domain.TriageRunRepository;
 import dev.sumituppal.pager.ingress.WebhookIngressService.Result;
 import dev.sumituppal.pager.security.WebhookSignatureVerifier;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
@@ -31,6 +34,19 @@ import static org.mockito.Mockito.when;
  *
  * <p>Coverage is by the four {@link Result} branches plus the race
  * condition on concurrent identical webhooks.
+ *
+ * <p><strong>Transaction simulation.</strong> The service registers
+ * {@link TransactionSynchronization#afterCommit()} callbacks so the
+ * Redis enqueue only happens after the DB commit succeeds. In tests
+ * there's no real transaction, so we initialize synchronization
+ * manually in {@link #setUp()}, then manually fire {@code afterCommit}
+ * on the registered callbacks after the service call, then clean up
+ * in {@link #tearDown()}.
+ *
+ * <p>This is standard practice for testing services that use
+ * {@code TransactionSynchronizationManager}. The same technique also
+ * lets us prove that if we DIDN'T fire the commit, the enqueue would
+ * never happen — which is the whole point of the outbox pattern.
  */
 class WebhookIngressServiceTest {
 
@@ -61,6 +77,30 @@ class WebhookIngressServiceTest {
             "pager.triage.queue",
             SECRET);
         service = new WebhookIngressService(triageRuns, queue, properties, objectMapper);
+
+        // Initialize a fake transaction so afterCommit callbacks register successfully.
+        TransactionSynchronizationManager.initSynchronization();
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Always clean up, even if the test threw.
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    /**
+     * Fire all currently-registered afterCommit callbacks, then clear them.
+     * Simulates Spring committing the transaction that would normally wrap
+     * the service call.
+     */
+    private static void commit() {
+        TransactionSynchronizationManager.getSynchronizations()
+            .forEach(TransactionSynchronization::afterCommit);
+        TransactionSynchronizationManager.clearSynchronization();
+        // Re-init so a subsequent operation in the same test (rare) still works.
+        TransactionSynchronizationManager.initSynchronization();
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -142,11 +182,14 @@ class WebhookIngressServiceTest {
 
     // ─────────────────────────────────────────────────────────────
     // Branch 4 — Accepted (happy path)
+    //
+    // This is where the outbox pattern matters. The enqueue must NOT
+    // fire until the transaction commits.
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("returns Accepted, saves, and enqueues on new webhook")
-    void newWebhookReturnsAccepted() throws Exception {
+    @DisplayName("saves immediately but defers enqueue until commit")
+    void newWebhookDefersEnqueueUntilCommit() throws Exception {
         byte[] rawBody = VALID_PAYLOAD.getBytes(StandardCharsets.UTF_8);
         String sig = signatureFor(rawBody);
 
@@ -162,7 +205,41 @@ class WebhookIngressServiceTest {
         assertThat(result).isInstanceOf(Result.Accepted.class);
         assertThat(((Result.Accepted) result).triageId()).isEqualTo("triage_new789");
         verify(triageRuns, times(1)).save(any());
+
+        // Enqueue has NOT fired yet — it's registered as an afterCommit
+        // callback, waiting for the transaction to commit.
+        verifyNoInteractions(queue);
+
+        // Simulate the DB commit — now the callback fires and enqueue happens.
+        commit();
+
         verify(queue, times(1)).enqueue(any());
+    }
+
+    @Test
+    @DisplayName("does not enqueue if the transaction is rolled back")
+    void enqueueSkippedOnRollback() throws Exception {
+        byte[] rawBody = VALID_PAYLOAD.getBytes(StandardCharsets.UTF_8);
+        String sig = signatureFor(rawBody);
+
+        when(triageRuns.findByIdempotencyKey(any())).thenReturn(Optional.empty());
+        when(triageRuns.save(any())).thenAnswer(inv -> {
+            TriageRun r = inv.getArgument(0);
+            r.setId("triage_will_rollback");
+            return r;
+        });
+
+        service.process(rawBody, sig);
+
+        // Simulate a rollback by NOT calling commit() — just clear the
+        // synchronizations without firing them. This is what Spring does
+        // on rollback.
+        TransactionSynchronizationManager.clearSynchronization();
+        TransactionSynchronizationManager.initSynchronization();
+
+        // Enqueue never happened — correct: we don't want a Redis job
+        // pointing at a row that will not exist in the DB.
+        verifyNoInteractions(queue);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -191,6 +268,9 @@ class WebhookIngressServiceTest {
 
         assertThat(result).isInstanceOf(Result.Duplicate.class);
         assertThat(((Result.Duplicate) result).triageId()).isEqualTo("triage_racewinner");
+
+        // No enqueue in the race path either — the winning webhook already handled it.
+        verifyNoInteractions(queue);
     }
 
     // ─────────────────────────────────────────────────────────────

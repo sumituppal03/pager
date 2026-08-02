@@ -30,7 +30,7 @@
                     startup logs before the filter has run on any request).
                 -->
                 <pattern>
-                    %cyan(%d{HH:mm:ss.SSS}) %highlight(%-5level) %magenta([%X{correlationId:-}]) %green([%thread]) %yellow(%logger{40}) - %msg%n
+                    %cyan(%d{HH:mm:ss.SSS}) %highlight(%-5level) %magenta([%X{correlationId:-}]) %green([%thread]) %yellow(%logger{40}) - %msg%n%ex
                 </pattern>
             </encoder>
         </appender>
