@@ -3,13 +3,15 @@ package dev.sumituppal.pager;
 import dev.sumituppal.pager.worker.TriageWorker;
 import dev.sumituppal.pager.worker.TriageOrchestrator;
 import dev.sumituppal.pager.domain.TriageRunRepository;
+import dev.sumituppal.pager.ingress.TriageQueueProducer;
+import dev.sumituppal.pager.ingress.WebhookIngressService;
 import dev.sumituppal.pager.observability.CorrelationIdFilter;
 import dev.sumituppal.pager.observability.CorrelationIdGenerator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
@@ -67,13 +69,13 @@ class PagerApplicationTests {
      * JPA autoconfigure is excluded, so no repository beans get created.
      * WebhookIngressService needs this to be constructable — provide a mock.
      */
-    @MockBean
+    @MockitoBean
     private TriageRunRepository triageRunRepository;
 
-    @MockBean
+    @MockitoBean
     private TriageWorker triageWorker;
 
-    @MockBean
+    @MockitoBean
     private TriageOrchestrator triageOrchestrator;
 
     /**
@@ -82,9 +84,15 @@ class PagerApplicationTests {
      * The raw type is intentional: MockBean's type-based matching finds it
      * regardless of the generic parameters at injection sites.
      */
-    @MockBean(name = "triageQueueTemplate")
+    @MockitoBean(name = "triageQueueTemplate")
     @SuppressWarnings("rawtypes")
     private RedisTemplate redisTemplate;
+
+    @MockitoBean
+    private dev.sumituppal.pager.domain.AgentEventRepository agentEventRepository;
+
+    @MockitoBean
+    private dev.sumituppal.pager.observability.AgentEventEmitter agentEventEmitter;
 
     @Test
     @DisplayName("Spring context loads")
