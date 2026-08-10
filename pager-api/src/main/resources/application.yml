@@ -60,11 +60,11 @@ server:
   compression:
     enabled: true
   error:
-    include-message: always # dev convenience; tighten in prod profile
+    include-message: always
     include-binding-errors: always
 
 # ------------------------------------------------------------------
-# Actuator — /actuator/health used by Docker healthcheck
+# Actuator
 # ------------------------------------------------------------------
 management:
   endpoints:
@@ -79,20 +79,19 @@ management:
 
 # ------------------------------------------------------------------
 # Pager domain config — env-overridable, read via @ConfigurationProperties
-# in later PRs. Declared here so the shape is visible from day one.
 # ------------------------------------------------------------------
 pager:
   # Confidence threshold for auto-posting read-only analysis to Slack
   confidence-autopost-threshold: 0.75
 
-  # Timeouts (per L8 of the study — every step degrades to correct)
+  # Timeouts
   specialist-timeout-ms: 45000
   tool-call-timeout-ms: 15000
 
-  # LLM model routing
+  # LLM model routing — pointing at Groq's models by default (PR #8)
   models:
-    fast: ${PAGER_MODEL_FAST:gpt-4o-mini}
-    quality: ${PAGER_MODEL_QUALITY:gpt-4o}
+    fast: ${PAGER_MODEL_FAST:llama-3.3-70b-versatile}
+    quality: ${PAGER_MODEL_QUALITY:llama-3.3-70b-versatile}
     embed: ${PAGER_EMBED_MODEL:text-embedding-3-small}
 
   # Budget guard
@@ -101,6 +100,13 @@ pager:
   # Webhook security
   queue-name: pager.triage.queue
   pagerduty-webhook-secret: ${PAGER_PAGERDUTY_WEBHOOK_SECRET:dev-only-change-me}
+
+  # LLM provider config (PR #8). Groq via its OpenAI-compatible API.
+  llm:
+    api-key: ${PAGER_GROQ_API_KEY:}
+    base-url: ${PAGER_LLM_BASE_URL:https://api.groq.com/openai/v1}
+    temperature: ${PAGER_LLM_TEMPERATURE:0.2}
+    timeout-ms: ${PAGER_LLM_TIMEOUT_MS:30000}
 
 # ------------------------------------------------------------------
 # Logging

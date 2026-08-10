@@ -10,6 +10,13 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
-
 pager:
   pagerduty-webhook-secret: test-secret
+  # LLM config for tests — no real API calls happen, but the ChatClient
+  # bean needs a valid config to instantiate. Empty API key is fine;
+  # the client will fail at first use, which no test triggers.
+  llm:
+    api-key: ""
+    base-url: https://api.groq.com/openai/v1
+    temperature: 0.0
+    timeout-ms: 30000
