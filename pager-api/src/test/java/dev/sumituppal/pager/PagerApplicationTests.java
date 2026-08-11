@@ -96,6 +96,12 @@ class PagerApplicationTests {
     private dev.sumituppal.pager.observability.AgentEventEmitter agentEventEmitter;
 
     @MockitoBean
+    private dev.sumituppal.pager.specialist.ChangeSpecialist changeSpecialist;
+
+    @MockitoBean
+    private dev.sumituppal.pager.specialist.MetricsSpecialist metricsSpecialist;
+    
+    @MockitoBean
     private dev.sumituppal.pager.llm.ChatClient chatClient;
 
     @MockitoBean
