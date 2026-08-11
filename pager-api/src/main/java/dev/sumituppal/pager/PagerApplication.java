@@ -2,6 +2,7 @@ package dev.sumituppal.pager;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * Pager — AI Incident Response Agent.
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * memory) as documented in docs/architecture.html Part IV.
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class PagerApplication {
 
     public static void main(String[] args) {

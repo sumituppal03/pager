@@ -1,5 +1,7 @@
 package dev.sumituppal.pager.worker;
 
+import dev.sumituppal.pager.domain.Finding;
+import dev.sumituppal.pager.domain.FindingRepository;
 import dev.sumituppal.pager.domain.Specialist;
 import dev.sumituppal.pager.domain.TriageRun;
 import dev.sumituppal.pager.domain.TriageRunRepository;
@@ -8,6 +10,9 @@ import dev.sumituppal.pager.ingress.TriageJob;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.Span;
 import dev.sumituppal.pager.observability.SpanContext;
+import dev.sumituppal.pager.specialist.SpecialistInput;
+import dev.sumituppal.pager.specialist.SpecialistOutput;
+import dev.sumituppal.pager.specialist.SymptomsSpecialist;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -17,31 +22,31 @@ import java.time.OffsetDateTime;
 import java.util.Optional;
 
 /**
- * The orchestrator: takes a job off the queue and drives one triage to completion.
+ * The orchestrator: takes a job off the queue and drives one triage
+ * from queued through the specialist analyses to completion.
  *
- * <h2>Current state (PR #6 + #7)</h2>
- * <p>This is still a stub for specialist work — see the TODO block inside
- * {@link #run(TriageJob)}. What PR #7 adds is <strong>observability</strong>:
- * the orchestrator now wraps its work in a {@link Span} that emits
- * {@code span.start} / {@code span.end} rows to {@code agent_events}.
- * When the specialist fan-out lands in PR #10-12, each specialist gets its
- * own child span opened from this parent — and the whole triage becomes a
- * hierarchical trace you can visualize.
+ * <h2>Current state (through PR #9)</h2>
+ * <p>Runs the Symptoms specialist and persists its output as a
+ * {@link Finding}. Later PRs will fan out to Change and Metrics
+ * specialists in parallel (PR #10), then merge results via an
+ * Aggregator (PR #11). For now, one specialist runs, one finding
+ * gets saved, and its summary becomes the triage's aggregated summary.
  *
- * <h2>Why is the emitter separate from the transaction?</h2>
- * <p>Event writes are side-effects. If the triage transaction rolls back
- * (e.g. because the DB briefly hiccups on the final commit), we still want
- * a record that the attempt happened. {@link AgentEventEmitter} swallows
- * write failures internally so an event blip can't fail a triage.
+ * <h2>Why not @Transactional around the whole run?</h2>
+ * <p>Historically we wrapped everything in one transaction. That's
+ * fine when the enclosed work is 5ms of DB writes. But specialist
+ * calls are 500-5000ms LLM calls — you cannot hold a database
+ * transaction that long without exhausting the connection pool. So
+ * the pattern now is: each state transition (queued → running →
+ * completed) gets its own short transaction; the specialist calls
+ * happen between transactions, outside any DB-transaction boundary.
  *
- * <h2>Why {@code @Transactional} on the whole method still?</h2>
- * <p>Two writes into {@code triage_runs} (mark running, mark completed).
- * If the app crashes between them the triage would be stuck as "running
- * forever" — bad. Wrapping in a transaction means either both writes commit
- * or neither does. When the specialist calls become real LLM calls in PR
- * #10-12, this will need to be split: LLM calls take seconds and can't be
- * held inside a DB transaction. Each state transition will then get its own
- * short transaction. For now (stub), one transaction is fine.
+ * <h2>Specialist failures don't fail the triage</h2>
+ * <p>{@link SymptomsSpecialist#analyze} never throws — it returns
+ * {@link SpecialistOutput#unknown(String)} on any error. The
+ * orchestrator persists that finding either way. This means a bad
+ * LLM day produces a queryable failure record in {@code findings},
+ * not a lost triage.
  */
 @Component
 public class TriageOrchestrator {
@@ -49,17 +54,29 @@ public class TriageOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(TriageOrchestrator.class);
 
     private final TriageRunRepository triageRuns;
+    private final FindingRepository findings;
     private final AgentEventEmitter events;
+    private final SymptomsSpecialist symptoms;
 
-    public TriageOrchestrator(TriageRunRepository triageRuns, AgentEventEmitter events) {
+    public TriageOrchestrator(
+            TriageRunRepository triageRuns,
+            FindingRepository findings,
+            AgentEventEmitter events,
+            SymptomsSpecialist symptoms) {
         this.triageRuns = triageRuns;
+        this.findings = findings;
         this.events = events;
+        this.symptoms = symptoms;
     }
 
     /**
-     * Run one triage from queued → running → completed.
+     * Run one triage from queued → running → specialist analysis → completed.
+     *
+     * <p>This method is NOT @Transactional. Each state transition uses
+     * a private helper that IS @Transactional, so DB writes still get
+     * their commit boundaries — but LLM calls happen outside any
+     * transaction to avoid holding DB connections during network I/O.
      */
-    @Transactional
     public void run(TriageJob job) {
         Optional<TriageRun> found = triageRuns.findById(job.triageId());
         if (found.isEmpty()) {
@@ -70,9 +87,7 @@ public class TriageOrchestrator {
 
         TriageRun triage = found.get();
 
-        // Idempotency: if this triage has already reached a terminal state
-        // (someone re-enqueued the same job, or a stale job survived a
-        // restart), don't re-run.
+        // Idempotency: skip triages that already reached a terminal state.
         if (triage.statusEnum() == TriageStatus.COMPLETED
                 || triage.statusEnum() == TriageStatus.FAILED
                 || triage.statusEnum() == TriageStatus.CANCELLED) {
@@ -81,48 +96,91 @@ public class TriageOrchestrator {
             return;
         }
 
-        // Open the root span for this triage. Every specialist span later
-        // will be a child of this one.
-        SpanContext ctx = SpanContext.root(
+        SpanContext rootSpan = SpanContext.root(
                 triage.getId(),
                 Specialist.AGGREGATOR,
                 "orchestrator"
         );
 
-        try (Span span = Span.open(events, ctx)) {
+        try (Span span = Span.open(events, rootSpan)) {
             try {
-                // Transition to running.
-                triage.statusEnum(TriageStatus.RUNNING);
-                triage.setStartedAt(OffsetDateTime.now());
-                triageRuns.save(triage);
+                markRunning(triage);
                 log.info("triage {} started", triage.getId());
 
-                // ==============================================================
-                // TODO(PR #10-12): Fan out to specialists (Symptoms, Change,
-                // Metrics, Comms) — each opened as a child span via
-                // ctx.child(specialist, name). Merge findings via Aggregator.
-                // HITL gate. For now: stub that immediately succeeds so we can
-                // prove the transport end-to-end.
-                // ==============================================================
-                String placeholderSummary = "Triage stub — specialists will run here in PR #10-12.";
-                triage.setAggregatedSummary(placeholderSummary);
-                triage.statusEnum(TriageStatus.COMPLETED);
-                triage.setCompletedAt(OffsetDateTime.now());
-                triageRuns.save(triage);
-                log.info("triage {} completed (stub)", triage.getId());
+                // Run the Symptoms specialist. Later PRs add Change +
+                // Metrics in parallel via CompletableFuture.
+                SpecialistInput input = new SpecialistInput(
+                        triage.getId(),
+                        triage.getIncidentId(),
+                        triage.getAlertSummary(),
+                        triage.getService(),
+                        triage.severityEnum() != null
+                                ? triage.severityEnum().name() : "UNKNOWN",
+                        rootSpan
+                );
+                SpecialistOutput symptomsFinding = symptoms.analyze(input);
+
+                // Persist the specialist's output as a Finding.
+                persistFinding(triage, symptomsFinding);
+
+                // For now, the Symptoms specialist's summary becomes
+                // the triage's summary. When PR #11 lands, the Aggregator
+                // will merge multiple findings into one summary here.
+                markCompleted(triage, symptomsFinding.summary());
+                log.info("triage {} completed", triage.getId());
 
                 span.setOutcome("completed");
             } catch (RuntimeException e) {
-                // Mark the triage failed on any exception, then let the span
-                // record the error before it closes.
-                triage.statusEnum(TriageStatus.FAILED);
-                triage.setCompletedAt(OffsetDateTime.now());
-                triageRuns.save(triage);
+                markFailed(triage);
                 span.recordError(e);
                 log.error("triage {} failed", triage.getId(), e);
-                // Re-throw so the @Transactional boundary sees the failure.
                 throw e;
             }
         }
+    }
+
+    // ---- transactional state transitions ----
+
+    @Transactional
+    protected void markRunning(TriageRun triage) {
+        triage.statusEnum(TriageStatus.RUNNING);
+        triage.setStartedAt(OffsetDateTime.now());
+        triageRuns.save(triage);
+    }
+
+    @Transactional
+    protected void persistFinding(TriageRun triage, SpecialistOutput output) {
+        Finding finding = new Finding();
+        finding.setTriageId(triage.getId());
+        finding.specialistEnum(Specialist.SYMPTOMS);
+        finding.categoryEnum(output.category());
+        // Findings require a severity in the schema. We inherit the
+        // triage's severity because Symptoms is describing the same
+        // problem the alert reported.
+        finding.severityEnum(triage.severityEnum() != null
+                ? triage.severityEnum()
+                : dev.sumituppal.pager.domain.Severity.P4);
+        finding.setSummary(output.summary());
+        finding.setConfidence(output.confidence());
+        // Store the LLM's reasoning + raw response for audit.
+        // SpecialistOutput.payload() is already a JSON string.
+        finding.setRationale(output.payload());
+        // createdAt is auto-populated in @PrePersist; no need to set explicitly.
+        findings.save(finding);
+    }
+
+    @Transactional
+    protected void markCompleted(TriageRun triage, String aggregatedSummary) {
+        triage.setAggregatedSummary(aggregatedSummary);
+        triage.statusEnum(TriageStatus.COMPLETED);
+        triage.setCompletedAt(OffsetDateTime.now());
+        triageRuns.save(triage);
+    }
+
+    @Transactional
+    protected void markFailed(TriageRun triage) {
+        triage.statusEnum(TriageStatus.FAILED);
+        triage.setCompletedAt(OffsetDateTime.now());
+        triageRuns.save(triage);
     }
 }
