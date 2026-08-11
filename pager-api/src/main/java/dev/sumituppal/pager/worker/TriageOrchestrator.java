@@ -1,5 +1,6 @@
 package dev.sumituppal.pager.worker;
 
+import dev.sumituppal.pager.config.PagerProperties;
 import dev.sumituppal.pager.domain.Finding;
 import dev.sumituppal.pager.domain.FindingRepository;
 import dev.sumituppal.pager.domain.Specialist;
@@ -10,6 +11,9 @@ import dev.sumituppal.pager.ingress.TriageJob;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.Span;
 import dev.sumituppal.pager.observability.SpanContext;
+import dev.sumituppal.pager.specialist.ChangeSpecialist;
+import dev.sumituppal.pager.specialist.MetricsSpecialist;
+import dev.sumituppal.pager.specialist.SpecialistAgent;
 import dev.sumituppal.pager.specialist.SpecialistInput;
 import dev.sumituppal.pager.specialist.SpecialistOutput;
 import dev.sumituppal.pager.specialist.SymptomsSpecialist;
@@ -19,34 +23,48 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 /**
- * The orchestrator: takes a job off the queue and drives one triage
- * from queued through the specialist analyses to completion.
+ * The orchestrator: takes a job off the queue and drives one triage from
+ * queued → running → parallel specialist fan-out → completed.
  *
- * <h2>Current state (through PR #9)</h2>
- * <p>Runs the Symptoms specialist and persists its output as a
- * {@link Finding}. Later PRs will fan out to Change and Metrics
- * specialists in parallel (PR #10), then merge results via an
- * Aggregator (PR #11). For now, one specialist runs, one finding
- * gets saved, and its summary becomes the triage's aggregated summary.
+ * <h2>Parallel fan-out</h2>
+ * <p>PR #9 called one specialist sequentially. PR #10 (this PR) runs
+ * three specialists — Symptoms, Change, Metrics — in parallel via
+ * {@link CompletableFuture}. Each specialist call takes 5-10 seconds
+ * against Groq; sequential execution would put a triage on the wall
+ * clock at 15-30 seconds. Parallel execution completes at the pace of
+ * the slowest specialist, cutting P99 latency by ~3x.
  *
- * <h2>Why not @Transactional around the whole run?</h2>
- * <p>Historically we wrapped everything in one transaction. That's
- * fine when the enclosed work is 5ms of DB writes. But specialist
- * calls are 500-5000ms LLM calls — you cannot hold a database
- * transaction that long without exhausting the connection pool. So
- * the pattern now is: each state transition (queued → running →
- * completed) gets its own short transaction; the specialist calls
- * happen between transactions, outside any DB-transaction boundary.
+ * <h2>Timeout per specialist, not global</h2>
+ * <p>Each specialist gets its own {@code pager.specialist-timeout-ms}
+ * budget (currently 45s). A slow Metrics specialist can't kill Change
+ * and Symptoms. If a specialist times out, its slot returns an UNKNOWN
+ * finding with the timeout details in the payload — persisted to the
+ * DB same as any other result, so we can see WHICH specialists were
+ * slow when investigating.
  *
- * <h2>Specialist failures don't fail the triage</h2>
- * <p>{@link SymptomsSpecialist#analyze} never throws — it returns
- * {@link SpecialistOutput#unknown(String)} on any error. The
- * orchestrator persists that finding either way. This means a bad
- * LLM day produces a queryable failure record in {@code findings},
- * not a lost triage.
+ * <h2>Failure isolation</h2>
+ * <p>Each specialist never throws (that contract is in
+ * {@code AbstractLlmSpecialist}). But if the {@code CompletableFuture}
+ * itself throws — timeout, thread interrupt, executor rejection — we
+ * catch it in the join loop and record UNKNOWN for that specialist.
+ * Two specialists can succeed even if a third dies.
+ *
+ * <h2>Why a dedicated executor?</h2>
+ * <p>Using the default {@code ForkJoinPool.commonPool()} shares threads
+ * with everything else in the JVM. Long-running LLM calls would starve
+ * common-pool users. A named executor with a bounded pool gives us
+ * back-pressure, thread-name visibility (jstack readable), and no
+ * accidental interaction with other Spring subsystems.
  */
 @Component
 public class TriageOrchestrator {
@@ -56,26 +74,43 @@ public class TriageOrchestrator {
     private final TriageRunRepository triageRuns;
     private final FindingRepository findings;
     private final AgentEventEmitter events;
-    private final SymptomsSpecialist symptoms;
+    private final List<SpecialistAgent> specialists;
+    private final long specialistTimeoutMs;
+    private final ExecutorService specialistExecutor;
 
     public TriageOrchestrator(
             TriageRunRepository triageRuns,
             FindingRepository findings,
             AgentEventEmitter events,
-            SymptomsSpecialist symptoms) {
+            SymptomsSpecialist symptoms,
+            ChangeSpecialist change,
+            MetricsSpecialist metrics,
+            PagerProperties properties) {
         this.triageRuns = triageRuns;
         this.findings = findings;
         this.events = events;
-        this.symptoms = symptoms;
+        this.specialists = List.of(symptoms, change, metrics);
+        this.specialistTimeoutMs = properties.specialistTimeoutMs();
+        // Fixed thread pool sized for our current specialist count.
+        // When we add specialists dynamically (future PR), this becomes
+        // a bounded pool with a queue and named "pager-specialist-N".
+        this.specialistExecutor = Executors.newFixedThreadPool(
+            specialists.size(),
+            r -> {
+                Thread t = new Thread(r);
+                t.setName("pager-specialist-" + t.getId());
+                t.setDaemon(false);
+                return t;
+            }
+        );
     }
 
     /**
-     * Run one triage from queued → running → specialist analysis → completed.
+     * Run one triage: queued → running → 3 parallel specialists → completed.
      *
-     * <p>This method is NOT @Transactional. Each state transition uses
-     * a private helper that IS @Transactional, so DB writes still get
-     * their commit boundaries — but LLM calls happen outside any
-     * transaction to avoid holding DB connections during network I/O.
+     * <p>NOT {@code @Transactional} — LLM calls take seconds; you can't
+     * hold a DB transaction that long. State transitions use private
+     * short-lived {@code @Transactional} helpers.
      */
     public void run(TriageJob job) {
         Optional<TriageRun> found = triageRuns.findById(job.triageId());
@@ -87,7 +122,6 @@ public class TriageOrchestrator {
 
         TriageRun triage = found.get();
 
-        // Idempotency: skip triages that already reached a terminal state.
         if (triage.statusEnum() == TriageStatus.COMPLETED
                 || triage.statusEnum() == TriageStatus.FAILED
                 || triage.statusEnum() == TriageStatus.CANCELLED) {
@@ -107,27 +141,35 @@ public class TriageOrchestrator {
                 markRunning(triage);
                 log.info("triage {} started", triage.getId());
 
-                // Run the Symptoms specialist. Later PRs add Change +
-                // Metrics in parallel via CompletableFuture.
-                SpecialistInput input = new SpecialistInput(
-                        triage.getId(),
-                        triage.getIncidentId(),
-                        triage.getAlertSummary(),
-                        triage.getService(),
-                        triage.severityEnum() != null
-                                ? triage.severityEnum().name() : "UNKNOWN",
-                        rootSpan
-                );
-                SpecialistOutput symptomsFinding = symptoms.analyze(input);
+                SpecialistInput input = buildInput(triage, rootSpan);
 
-                // Persist the specialist's output as a Finding.
-                persistFinding(triage, symptomsFinding);
+                // Kick off all three specialists in parallel. Each one
+                // opens its own child span off rootSpan (that happens
+                // inside AbstractLlmSpecialist.analyze). We only care
+                // about coordination here.
+                List<SpecialistOutput> outputs = runSpecialistsInParallel(input);
 
-                // For now, the Symptoms specialist's summary becomes
-                // the triage's summary. When PR #11 lands, the Aggregator
-                // will merge multiple findings into one summary here.
-                markCompleted(triage, symptomsFinding.summary());
-                log.info("triage {} completed", triage.getId());
+                // Persist all findings. When a specialist errored or
+                // timed out, we still persist an UNKNOWN row so the
+                // failure is queryable.
+                for (int i = 0; i < specialists.size(); i++) {
+                    persistFinding(triage, specialists.get(i).kind(), outputs.get(i));
+                }
+
+                // Pick the highest-confidence finding as the "primary"
+                // summary for the triage. When the Aggregator lands in
+                // PR #11, this will be replaced by a proper merge +
+                // agreement-score computation. For now, argmax by
+                // confidence is a reasonable placeholder.
+                String primarySummary = outputs.stream()
+                    .max((a, b) -> a.confidence().compareTo(b.confidence()))
+                    .map(SpecialistOutput::summary)
+                    .filter(s -> !s.isBlank())
+                    .orElse("No specialist produced a usable finding.");
+
+                markCompleted(triage, primarySummary);
+                log.info("triage {} completed with {} findings",
+                    triage.getId(), outputs.size());
 
                 span.setOutcome("completed");
             } catch (RuntimeException e) {
@@ -137,6 +179,40 @@ public class TriageOrchestrator {
                 throw e;
             }
         }
+    }
+
+    // ---- parallel specialist orchestration ----
+
+    /**
+     * Runs all specialists concurrently and blocks until all complete or
+     * their individual timeouts expire.
+     *
+     * <p>Never throws. A specialist that times out or crashes contributes
+     * an UNKNOWN output to the returned list — same slot as it would have
+     * had if it succeeded. Order matches {@code specialists} order.
+     */
+    private List<SpecialistOutput> runSpecialistsInParallel(SpecialistInput input) {
+        List<CompletableFuture<SpecialistOutput>> futures = specialists.stream()
+            .map(s -> CompletableFuture
+                .supplyAsync(() -> s.analyze(input), specialistExecutor)
+                .completeOnTimeout(
+                    SpecialistOutput.unknown(
+                        s.kind().name() + " specialist timed out after "
+                            + specialistTimeoutMs + "ms"),
+                    specialistTimeoutMs, TimeUnit.MILLISECONDS)
+                .exceptionally(t -> SpecialistOutput.unknown(
+                    s.kind().name() + " specialist crashed: " + t.getMessage()))
+            )
+            .collect(Collectors.toList());
+
+        // allOf().join() waits for all futures. Each future has already
+        // been mapped to either a real output, a timeout output, or an
+        // exception output — so join won't throw here.
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+
+        return futures.stream()
+            .map(CompletableFuture::join)
+            .collect(Collectors.toList());
     }
 
     // ---- transactional state transitions ----
@@ -149,23 +225,17 @@ public class TriageOrchestrator {
     }
 
     @Transactional
-    protected void persistFinding(TriageRun triage, SpecialistOutput output) {
+    protected void persistFinding(TriageRun triage, Specialist kind, SpecialistOutput output) {
         Finding finding = new Finding();
         finding.setTriageId(triage.getId());
-        finding.specialistEnum(Specialist.SYMPTOMS);
+        finding.specialistEnum(kind);
         finding.categoryEnum(output.category());
-        // Findings require a severity in the schema. We inherit the
-        // triage's severity because Symptoms is describing the same
-        // problem the alert reported.
         finding.severityEnum(triage.severityEnum() != null
-                ? triage.severityEnum()
-                : dev.sumituppal.pager.domain.Severity.P4);
+            ? triage.severityEnum()
+            : dev.sumituppal.pager.domain.Severity.P4);
         finding.setSummary(output.summary());
         finding.setConfidence(output.confidence());
-        // Store the LLM's reasoning + raw response for audit.
-        // SpecialistOutput.payload() is already a JSON string.
         finding.setRationale(output.payload());
-        // createdAt is auto-populated in @PrePersist; no need to set explicitly.
         findings.save(finding);
     }
 
@@ -182,5 +252,18 @@ public class TriageOrchestrator {
         triage.statusEnum(TriageStatus.FAILED);
         triage.setCompletedAt(OffsetDateTime.now());
         triageRuns.save(triage);
+    }
+
+    // ---- helpers ----
+
+    private SpecialistInput buildInput(TriageRun triage, SpanContext rootSpan) {
+        return new SpecialistInput(
+            triage.getId(),
+            triage.getIncidentId(),
+            triage.getAlertSummary(),
+            triage.getService(),
+            triage.severityEnum() != null ? triage.severityEnum().name() : "UNKNOWN",
+            rootSpan
+        );
     }
 }

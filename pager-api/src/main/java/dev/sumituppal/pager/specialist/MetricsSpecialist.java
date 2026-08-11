@@ -10,18 +10,23 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 
 /**
- * The Symptoms specialist — describes what's observably broken.
+ * The Metrics specialist — hypothesizes what upstream signals (traffic,
+ * latency, saturation) might explain the incident.
  *
- * <p>Scoped to observation only. Does NOT identify root causes — that's
- * the Change and Metrics specialists' job. Does NOT categorize into a
- * cause category — that's the Aggregator's job in PR #11. Its {@link
- * SpecialistOutput}s always carry {@link
- * dev.sumituppal.pager.domain.FindingCategory#UNKNOWN}.
+ * <h2>Current state — no real tools yet</h2>
+ * <p>In the final architecture, this specialist queries Prometheus /
+ * CloudWatch / Datadog to fetch the actual metric time-series in the
+ * incident window and reason about them. For now, the LLM runs against
+ * the alert alone and hypothesizes what metric shape would explain the
+ * observed behavior.
+ *
+ * <p>PR #14 will wire this to a real Prometheus tool. The specialist's
+ * public contract does not change.
  */
 @Component
-public class SymptomsSpecialist extends AbstractLlmSpecialist {
+public class MetricsSpecialist extends AbstractLlmSpecialist {
 
-    public SymptomsSpecialist(
+    public MetricsSpecialist(
             ChatClient chat,
             PromptRegistry prompts,
             AgentEventEmitter events,
@@ -31,12 +36,12 @@ public class SymptomsSpecialist extends AbstractLlmSpecialist {
 
     @Override
     public Specialist kind() {
-        return Specialist.SYMPTOMS;
+        return Specialist.METRICS;
     }
 
     @Override
     protected String promptName() {
-        return "symptoms";
+        return "metrics";
     }
 
     @Override

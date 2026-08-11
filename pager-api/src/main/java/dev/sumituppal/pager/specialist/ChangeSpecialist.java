@@ -10,18 +10,24 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 
 /**
- * The Symptoms specialist — describes what's observably broken.
+ * The Change specialist — hypothesizes whether recent deploys or config
+ * changes could explain the incident.
  *
- * <p>Scoped to observation only. Does NOT identify root causes — that's
- * the Change and Metrics specialists' job. Does NOT categorize into a
- * cause category — that's the Aggregator's job in PR #11. Its {@link
- * SpecialistOutput}s always carry {@link
- * dev.sumituppal.pager.domain.FindingCategory#UNKNOWN}.
+ * <h2>Current state — no real tools yet</h2>
+ * <p>In the final architecture, this specialist queries a deploy-history
+ * tool (GitHub Actions, ArgoCD, Spinnaker) to enumerate deploys inside
+ * the incident window and reason about them. For now, we run the LLM
+ * against the alert alone and ask it to hypothesize whether the alert
+ * <em>shape</em> is consistent with a deploy regression.
+ *
+ * <p>PR #14 will wire this to a real (or stubbed) deploy-history tool.
+ * The specialist's public contract does not change — only its prompt
+ * variables + template will grow.
  */
 @Component
-public class SymptomsSpecialist extends AbstractLlmSpecialist {
+public class ChangeSpecialist extends AbstractLlmSpecialist {
 
-    public SymptomsSpecialist(
+    public ChangeSpecialist(
             ChatClient chat,
             PromptRegistry prompts,
             AgentEventEmitter events,
@@ -31,12 +37,12 @@ public class SymptomsSpecialist extends AbstractLlmSpecialist {
 
     @Override
     public Specialist kind() {
-        return Specialist.SYMPTOMS;
+        return Specialist.CHANGE;
     }
 
     @Override
     protected String promptName() {
-        return "symptoms";
+        return "change";
     }
 
     @Override

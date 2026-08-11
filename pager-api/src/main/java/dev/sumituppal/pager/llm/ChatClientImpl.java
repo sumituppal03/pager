@@ -130,7 +130,6 @@ public class ChatClientImpl implements ChatClient {
         }
         return m;
     }
-
     private ChatLanguageModel buildModel(String modelName) {
         return OpenAiChatModel.builder()
             .apiKey(llm.apiKey())
@@ -139,6 +138,7 @@ public class ChatClientImpl implements ChatClient {
             .temperature(llm.temperature())
             .timeout(Duration.ofMillis(llm.timeoutMs()))
             .maxTokens(2048)
+            .responseFormat("json_object")
             .logRequests(false)
             .logResponses(false)
             .build();
