@@ -138,6 +138,7 @@ public class ChatClientImpl implements ChatClient {
             .modelName(modelName)
             .temperature(llm.temperature())
             .timeout(Duration.ofMillis(llm.timeoutMs()))
+            .maxTokens(2048)
             .logRequests(false)
             .logResponses(false)
             .build();

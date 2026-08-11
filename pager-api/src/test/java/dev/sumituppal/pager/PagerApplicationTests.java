@@ -101,6 +101,9 @@ class PagerApplicationTests {
     @MockitoBean
     private dev.sumituppal.pager.llm.PromptRegistry promptRegistry;
     
+    @MockitoBean
+    private dev.sumituppal.pager.specialist.SymptomsSpecialist symptomsSpecialist;
+    
     @Test
     @DisplayName("Spring context loads")
     void contextLoads() {

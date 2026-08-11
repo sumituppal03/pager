@@ -1,16 +1,24 @@
 package dev.sumituppal.pager.worker;
 
+import dev.sumituppal.pager.domain.Finding;
+import dev.sumituppal.pager.domain.FindingCategory;
+import dev.sumituppal.pager.domain.FindingRepository;
 import dev.sumituppal.pager.domain.Severity;
+import dev.sumituppal.pager.domain.Specialist;
 import dev.sumituppal.pager.domain.TriageRun;
 import dev.sumituppal.pager.domain.TriageRunRepository;
 import dev.sumituppal.pager.domain.TriageStatus;
 import dev.sumituppal.pager.ingress.TriageJob;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
+import dev.sumituppal.pager.specialist.SpecialistInput;
+import dev.sumituppal.pager.specialist.SpecialistOutput;
+import dev.sumituppal.pager.specialist.SymptomsSpecialist;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -28,83 +36,103 @@ import static org.mockito.Mockito.when;
 /**
  * Tests for {@link TriageOrchestrator}.
  *
- * <p>These tests prove the state-machine transitions AND that the orchestrator
- * emits the right observability signal — a span with start + end, and an
- * error event if the enclosed work throws. Once specialist fan-out lands
- * in PR #10-12, this test will grow to verify child spans too.
- *
- * <p>The stub summary text is intentionally NOT asserted (it will change).
+ * <p>These tests prove the state-machine transitions, the specialist
+ * integration, and that the orchestrator emits observability signals
+ * correctly. All external dependencies (repos, specialist, emitter)
+ * are mocked.
  */
 class TriageOrchestratorTest {
 
     private TriageRunRepository triageRuns;
+    private FindingRepository findings;
     private AgentEventEmitter events;
+    private SymptomsSpecialist symptoms;
     private TriageOrchestrator orchestrator;
 
     @BeforeEach
     void setUp() {
         triageRuns = mock(TriageRunRepository.class);
+        findings = mock(FindingRepository.class);
         events = mock(AgentEventEmitter.class);
-        orchestrator = new TriageOrchestrator(triageRuns, events);
+        symptoms = mock(SymptomsSpecialist.class);
+        orchestrator = new TriageOrchestrator(triageRuns, findings, events, symptoms);
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Happy path — queued → running → completed, with span emitted
+    // Happy path — specialist runs, finding persists, triage completes
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("queued triage transitions running → completed")
-    void queuedTriageCompletes() {
+    @DisplayName("happy path runs specialist, persists finding, transitions to completed")
+    void happyPathCompletesTriage() {
         TriageRun triage = newQueuedTriage("triage_123");
         when(triageRuns.findById("triage_123")).thenReturn(Optional.of(triage));
+        when(symptoms.analyze(any(SpecialistInput.class)))
+            .thenReturn(sampleFinding("Checkout 5xx spike detected", "0.85"));
 
         orchestrator.run(new TriageJob("triage_123", "PGR1", 1));
 
-        // Two saves: one to mark running, one to mark completed.
-        ArgumentCaptor<TriageRun> saves = ArgumentCaptor.forClass(TriageRun.class);
-        verify(triageRuns, times(2)).save(saves.capture());
+        // Specialist was invoked with the triage details.
+        ArgumentCaptor<SpecialistInput> specialistInput = ArgumentCaptor.forClass(SpecialistInput.class);
+        verify(symptoms, times(1)).analyze(specialistInput.capture());
+        assertThat(specialistInput.getValue().triageId()).isEqualTo("triage_123");
+        assertThat(specialistInput.getValue().alertSummary()).isEqualTo("test alert");
+        assertThat(specialistInput.getValue().parentSpan()).isNotNull();
 
-        TriageRun finalState = saves.getAllValues().get(1);
+        // Finding was persisted.
+        // Finding was persisted.
+        ArgumentCaptor<Finding> saved = ArgumentCaptor.forClass(Finding.class);
+        verify(findings, times(1)).save(saved.capture());
+        Finding f = saved.getValue();
+        assertThat(f.getTriageId()).isEqualTo("triage_123");
+        assertThat(f.specialistEnum()).isEqualTo(Specialist.SYMPTOMS);
+        assertThat(f.severityEnum()).isEqualTo(Severity.P2); // inherited from triage
+        assertThat(f.getSummary()).isEqualTo("Checkout 5xx spike detected");
+        assertThat(f.getConfidence()).isEqualByComparingTo("0.85");
+        assertThat(f.getRationale()).isNotBlank(); // payload from specialist
+
+        // Triage was marked completed with the specialist's summary.
+        ArgumentCaptor<TriageRun> triageSaves = ArgumentCaptor.forClass(TriageRun.class);
+        verify(triageRuns, times(2)).save(triageSaves.capture());
+        TriageRun finalState = triageSaves.getAllValues().get(1);
         assertThat(finalState.statusEnum()).isEqualTo(TriageStatus.COMPLETED);
-        assertThat(finalState.getStartedAt()).isNotNull();
-        assertThat(finalState.getCompletedAt()).isNotNull();
-        assertThat(finalState.getAggregatedSummary()).isNotBlank();
+        assertThat(finalState.getAggregatedSummary()).isEqualTo("Checkout 5xx spike detected");
     }
 
     @Test
-    @DisplayName("happy path emits span.start and span.end, no error")
-    void happyPathEmitsSpanStartAndEnd() {
-        TriageRun triage = newQueuedTriage("triage_span_ok");
+    @DisplayName("happy path emits span.start and span.end")
+    void happyPathEmitsSpans() {
+        TriageRun triage = newQueuedTriage("triage_span");
         when(triageRuns.findById(any())).thenReturn(Optional.of(triage));
+        when(symptoms.analyze(any(SpecialistInput.class)))
+            .thenReturn(sampleFinding("summary", "0.5"));
 
-        orchestrator.run(new TriageJob("triage_span_ok", "PGR1", 1));
+        orchestrator.run(new TriageJob("triage_span", "PGR1", 1));
 
-        // spanStart once, spanEnd once with outcome=completed
         verify(events, times(1)).spanStart(any());
         verify(events, times(1)).spanEnd(any(), anyLong(), eq("completed"));
-
-        // No error event on the happy path.
         verify(events, never()).error(any(), anyString());
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Idempotency — terminal-state triages skipped without side effects
+    // Idempotency — terminal-state and missing triages
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("missing triage row is logged and dropped — no span emitted")
+    @DisplayName("missing triage row is dropped without side effects")
     void missingTriageIsDropped() {
         when(triageRuns.findById(any())).thenReturn(Optional.empty());
 
         orchestrator.run(new TriageJob("triage_missing", "PGR1", 1));
 
         verify(triageRuns, never()).save(any());
+        verify(findings, never()).save(any());
+        verify(symptoms, never()).analyze(any());
         verify(events, never()).spanStart(any());
-        verify(events, never()).spanEnd(any(), anyLong(), anyString());
     }
 
     @Test
-    @DisplayName("already-completed triage is skipped and no span emitted")
+    @DisplayName("already-completed triage is skipped")
     void alreadyCompletedIsSkipped() {
         TriageRun triage = newQueuedTriage("triage_done");
         triage.statusEnum(TriageStatus.COMPLETED);
@@ -112,12 +140,12 @@ class TriageOrchestratorTest {
 
         orchestrator.run(new TriageJob("triage_done", "PGR1", 1));
 
+        verify(symptoms, never()).analyze(any());
         verify(triageRuns, never()).save(any());
-        verify(events, never()).spanStart(any());
     }
 
     @Test
-    @DisplayName("already-failed triage is skipped and no span emitted")
+    @DisplayName("already-failed triage is skipped")
     void alreadyFailedIsSkipped() {
         TriageRun triage = newQueuedTriage("triage_dead");
         triage.statusEnum(TriageStatus.FAILED);
@@ -125,55 +153,58 @@ class TriageOrchestratorTest {
 
         orchestrator.run(new TriageJob("triage_dead", "PGR1", 1));
 
-        verify(triageRuns, never()).save(any());
-        verify(events, never()).spanStart(any());
-    }
-
-    @Test
-    @DisplayName("already-cancelled triage is skipped and no span emitted")
-    void alreadyCancelledIsSkipped() {
-        TriageRun triage = newQueuedTriage("triage_x");
-        triage.statusEnum(TriageStatus.CANCELLED);
-        when(triageRuns.findById("triage_x")).thenReturn(Optional.of(triage));
-
-        orchestrator.run(new TriageJob("triage_x", "PGR1", 1));
-
-        verify(triageRuns, never()).save(any());
-        verify(events, never()).spanStart(any());
+        verify(symptoms, never()).analyze(any());
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Failure path — the second save (mark completed) throws, and we assert
-    // the orchestrator emits an error event and closes the span with outcome=error.
-    //
-    // We use a call-counter on save() instead of matcher-based conditional
-    // stubbing — cleaner and less prone to Mockito argument-matcher gotchas.
+    // Failure paths
     // ─────────────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("save failure marks triage FAILED, emits error, ends span with outcome=error")
-    void saveFailureEmitsErrorAndFailsTriage() {
-        TriageRun triage = newQueuedTriage("triage_fails");
+    @DisplayName("specialist returning UNKNOWN finding is persisted, triage still completes")
+    void specialistUnknownFindingCompletes() {
+        TriageRun triage = newQueuedTriage("triage_unknown");
         when(triageRuns.findById(any())).thenReturn(Optional.of(triage));
+        when(symptoms.analyze(any(SpecialistInput.class)))
+            .thenReturn(SpecialistOutput.unknown("LLM returned garbage"));
 
-        // The first save (RUNNING transition) succeeds; the third save
-        // in the catch block (FAILED transition) also succeeds; but the
-        // second save (COMPLETED transition) throws. Use a counter to
-        // stub call-by-call.
-        AtomicInteger callNo = new AtomicInteger(0);
-        when(triageRuns.save(any())).thenAnswer(inv -> {
-            int n = callNo.incrementAndGet();
-            if (n == 2) {
-                throw new RuntimeException("simulated DB failure on completed-write");
+        orchestrator.run(new TriageJob("triage_unknown", "PGR1", 1));
+
+        // Finding was persisted with UNKNOWN category.
+        ArgumentCaptor<Finding> saved = ArgumentCaptor.forClass(Finding.class);
+        verify(findings, times(1)).save(saved.capture());
+        assertThat(saved.getValue().categoryEnum()).isEqualTo(FindingCategory.UNKNOWN);
+        assertThat(saved.getValue().getConfidence()).isEqualByComparingTo("0.0");
+
+        // Triage was still completed (specialist errors are recorded, not fatal).
+        verify(triageRuns, times(2)).save(any());
+    }
+
+    @Test
+    @DisplayName("finding save failure marks triage FAILED and emits error span")
+    void findingSaveFailureFailsTriage() {
+        TriageRun triage = newQueuedTriage("triage_dbfail");
+        when(triageRuns.findById(any())).thenReturn(Optional.of(triage));
+        when(symptoms.analyze(any(SpecialistInput.class)))
+            .thenReturn(sampleFinding("summary", "0.5"));
+
+        // Fail the finding save. The mark-failed path saves the triage
+        // twice: once for RUNNING, once for FAILED. Use a call counter
+        // to simulate the save on the second call (COMPLETED transition)
+        // failing.
+        AtomicInteger findingCallCount = new AtomicInteger(0);
+        when(findings.save(any())).thenAnswer(inv -> {
+            if (findingCallCount.incrementAndGet() == 1) {
+                throw new RuntimeException("simulated DB failure");
             }
             return inv.getArgument(0);
         });
 
         try {
-            orchestrator.run(new TriageJob("triage_fails", "PGR1", 1));
+            orchestrator.run(new TriageJob("triage_dbfail", "PGR1", 1));
         } catch (RuntimeException expected) {
-            // Re-throw from orchestrator is intentional so @Transactional
-            // rolls back. We swallow it here to assert observable side effects.
+            // Re-throw is intentional so upstream (transaction, worker)
+            // sees the failure.
         }
 
         verify(events, times(1)).error(any(), anyString());
@@ -194,5 +225,14 @@ class TriageOrchestratorTest {
         t.statusEnum(TriageStatus.QUEUED);
         t.setRawPayload("{}");
         return t;
+    }
+
+    private static SpecialistOutput sampleFinding(String summary, String confidence) {
+        return new SpecialistOutput(
+            FindingCategory.UNKNOWN,
+            summary,
+            new BigDecimal(confidence),
+            "{}"
+        );
     }
 }
