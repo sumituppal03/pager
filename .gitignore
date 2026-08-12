@@ -47,3 +47,5 @@ node_modules/
 .next/
 
 send-webhook.ps1
+
+rationale_sample.txt

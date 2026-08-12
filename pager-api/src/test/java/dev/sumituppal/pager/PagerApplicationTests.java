@@ -102,6 +102,12 @@ class PagerApplicationTests {
     private dev.sumituppal.pager.specialist.MetricsSpecialist metricsSpecialist;
     
     @MockitoBean
+    private dev.sumituppal.pager.specialist.CommsSpecialist commsSpecialist;
+    
+    @MockitoBean
+    private dev.sumituppal.pager.specialist.Aggregator aggregator;
+    
+    @MockitoBean
     private dev.sumituppal.pager.llm.ChatClient chatClient;
 
     @MockitoBean

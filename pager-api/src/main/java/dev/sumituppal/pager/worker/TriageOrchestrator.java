@@ -11,7 +11,10 @@ import dev.sumituppal.pager.ingress.TriageJob;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.Span;
 import dev.sumituppal.pager.observability.SpanContext;
+import dev.sumituppal.pager.specialist.Aggregator;
+import dev.sumituppal.pager.specialist.Aggregator.SpecialistFinding;
 import dev.sumituppal.pager.specialist.ChangeSpecialist;
+import dev.sumituppal.pager.specialist.CommsSpecialist;
 import dev.sumituppal.pager.specialist.MetricsSpecialist;
 import dev.sumituppal.pager.specialist.SpecialistAgent;
 import dev.sumituppal.pager.specialist.SpecialistInput;
@@ -23,48 +26,44 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
  * The orchestrator: takes a job off the queue and drives one triage from
- * queued → running → parallel specialist fan-out → completed.
+ * queued → running → 4-way specialist fan-out → aggregation → completed.
  *
- * <h2>Parallel fan-out</h2>
- * <p>PR #9 called one specialist sequentially. PR #10 (this PR) runs
- * three specialists — Symptoms, Change, Metrics — in parallel via
- * {@link CompletableFuture}. Each specialist call takes 5-10 seconds
- * against Groq; sequential execution would put a triage on the wall
- * clock at 15-30 seconds. Parallel execution completes at the pace of
- * the slowest specialist, cutting P99 latency by ~3x.
+ * <h2>The full pipeline (PR #11)</h2>
+ * <ol>
+ *   <li>Load the triage row, verify not terminal.</li>
+ *   <li>Mark it running.</li>
+ *   <li>Fan out to 4 specialists in parallel (Symptoms, Change,
+ *       Metrics, Comms) via {@link CompletableFuture}.</li>
+ *   <li>Persist all 4 findings.</li>
+ *   <li>Run the Aggregator over the 4 findings.</li>
+ *   <li>Persist the aggregator's merged finding (5th row, with a real
+ *       cause category).</li>
+ *   <li>Mark the triage completed with the merged summary.</li>
+ * </ol>
  *
- * <h2>Timeout per specialist, not global</h2>
- * <p>Each specialist gets its own {@code pager.specialist-timeout-ms}
- * budget (currently 45s). A slow Metrics specialist can't kill Change
- * and Symptoms. If a specialist times out, its slot returns an UNKNOWN
- * finding with the timeout details in the payload — persisted to the
- * DB same as any other result, so we can see WHICH specialists were
- * slow when investigating.
+ * <h2>Why persist the aggregator finding as a 5th row?</h2>
+ * <p>The {@code findings} table becomes self-describing: a single
+ * {@code SELECT * FROM findings WHERE triage_id = ?} returns all 4
+ * specialist views plus the merged conclusion. The trace viewer,
+ * cost ledger, and audit workflows all read from the same table
+ * without re-joining triage_runs.
  *
  * <h2>Failure isolation</h2>
- * <p>Each specialist never throws (that contract is in
- * {@code AbstractLlmSpecialist}). But if the {@code CompletableFuture}
- * itself throws — timeout, thread interrupt, executor rejection — we
- * catch it in the join loop and record UNKNOWN for that specialist.
- * Two specialists can succeed even if a third dies.
- *
- * <h2>Why a dedicated executor?</h2>
- * <p>Using the default {@code ForkJoinPool.commonPool()} shares threads
- * with everything else in the JVM. Long-running LLM calls would starve
- * common-pool users. A named executor with a bounded pool gives us
- * back-pressure, thread-name visibility (jstack readable), and no
- * accidental interaction with other Spring subsystems.
+ * <p>Each specialist can fail independently; the aggregator can fail
+ * independently; the triage still completes. If all four specialists
+ * timed out, the aggregator falls back to whatever the highest-
+ * confidence input was, and the triage completes with that.
  */
 @Component
 public class TriageOrchestrator {
@@ -75,6 +74,7 @@ public class TriageOrchestrator {
     private final FindingRepository findings;
     private final AgentEventEmitter events;
     private final List<SpecialistAgent> specialists;
+    private final Aggregator aggregator;
     private final long specialistTimeoutMs;
     private final ExecutorService specialistExecutor;
 
@@ -85,15 +85,15 @@ public class TriageOrchestrator {
             SymptomsSpecialist symptoms,
             ChangeSpecialist change,
             MetricsSpecialist metrics,
+            CommsSpecialist comms,
+            Aggregator aggregator,
             PagerProperties properties) {
         this.triageRuns = triageRuns;
         this.findings = findings;
         this.events = events;
-        this.specialists = List.of(symptoms, change, metrics);
+        this.specialists = List.of(symptoms, change, metrics, comms);
+        this.aggregator = aggregator;
         this.specialistTimeoutMs = properties.specialistTimeoutMs();
-        // Fixed thread pool sized for our current specialist count.
-        // When we add specialists dynamically (future PR), this becomes
-        // a bounded pool with a queue and named "pager-specialist-N".
         this.specialistExecutor = Executors.newFixedThreadPool(
             specialists.size(),
             r -> {
@@ -105,13 +105,6 @@ public class TriageOrchestrator {
         );
     }
 
-    /**
-     * Run one triage: queued → running → 3 parallel specialists → completed.
-     *
-     * <p>NOT {@code @Transactional} — LLM calls take seconds; you can't
-     * hold a DB transaction that long. State transitions use private
-     * short-lived {@code @Transactional} helpers.
-     */
     public void run(TriageJob job) {
         Optional<TriageRun> found = triageRuns.findById(job.triageId());
         if (found.isEmpty()) {
@@ -131,10 +124,7 @@ public class TriageOrchestrator {
         }
 
         SpanContext rootSpan = SpanContext.root(
-                triage.getId(),
-                Specialist.AGGREGATOR,
-                "orchestrator"
-        );
+                triage.getId(), Specialist.AGGREGATOR, "orchestrator");
 
         try (Span span = Span.open(events, rootSpan)) {
             try {
@@ -143,33 +133,44 @@ public class TriageOrchestrator {
 
                 SpecialistInput input = buildInput(triage, rootSpan);
 
-                // Kick off all three specialists in parallel. Each one
-                // opens its own child span off rootSpan (that happens
-                // inside AbstractLlmSpecialist.analyze). We only care
-                // about coordination here.
-                List<SpecialistOutput> outputs = runSpecialistsInParallel(input);
+                // Step 1 — run all specialists in parallel.
+                List<SpecialistOutput> specialistOutputs = runSpecialistsInParallel(input);
 
-                // Persist all findings. When a specialist errored or
-                // timed out, we still persist an UNKNOWN row so the
-                // failure is queryable.
+                // Step 2 — persist each specialist finding.
                 for (int i = 0; i < specialists.size(); i++) {
-                    persistFinding(triage, specialists.get(i).kind(), outputs.get(i));
+                    persistFinding(triage, specialists.get(i).kind(),
+                        specialistOutputs.get(i));
                 }
+                log.info("triage {} persisted {} specialist findings",
+                    triage.getId(), specialistOutputs.size());
 
-                // Pick the highest-confidence finding as the "primary"
-                // summary for the triage. When the Aggregator lands in
-                // PR #11, this will be replaced by a proper merge +
-                // agreement-score computation. For now, argmax by
-                // confidence is a reasonable placeholder.
-                String primarySummary = outputs.stream()
-                    .max((a, b) -> a.confidence().compareTo(b.confidence()))
-                    .map(SpecialistOutput::summary)
-                    .filter(s -> !s.isBlank())
-                    .orElse("No specialist produced a usable finding.");
+                // Step 3 — run the aggregator over the specialist findings.
+                List<SpecialistFinding> aggregatorInputs = new ArrayList<>();
+                for (int i = 0; i < specialists.size(); i++) {
+                    SpecialistOutput out = specialistOutputs.get(i);
+                    aggregatorInputs.add(new SpecialistFinding(
+                        specialists.get(i).kind().name().toLowerCase(),
+                        out.summary(),
+                        out.confidence(),
+                        extractReasoning(out.payload())
+                    ));
+                }
+                SpecialistOutput merged = aggregator.aggregate(
+                    triage.getId(), rootSpan, aggregatorInputs);
 
-                markCompleted(triage, primarySummary);
-                log.info("triage {} completed with {} findings",
-                    triage.getId(), outputs.size());
+                // Step 4 — persist the aggregator's merged finding as a 5th row.
+                persistFinding(triage, Specialist.AGGREGATOR, merged);
+
+                // Step 5 — mark the triage completed with the merged summary.
+                String finalSummary = !merged.summary().isBlank()
+                    ? merged.summary()
+                    : "No specialist produced a usable finding.";
+                markCompleted(triage, finalSummary);
+                log.info("triage {} completed — category={}, confidence={}, summary=\"{}\"",
+                    triage.getId(),
+                    merged.category().dbValue(),
+                    merged.confidence(),
+                    truncate(finalSummary, 80));
 
                 span.setOutcome("completed");
             } catch (RuntimeException e) {
@@ -183,14 +184,6 @@ public class TriageOrchestrator {
 
     // ---- parallel specialist orchestration ----
 
-    /**
-     * Runs all specialists concurrently and blocks until all complete or
-     * their individual timeouts expire.
-     *
-     * <p>Never throws. A specialist that times out or crashes contributes
-     * an UNKNOWN output to the returned list — same slot as it would have
-     * had if it succeeded. Order matches {@code specialists} order.
-     */
     private List<SpecialistOutput> runSpecialistsInParallel(SpecialistInput input) {
         List<CompletableFuture<SpecialistOutput>> futures = specialists.stream()
             .map(s -> CompletableFuture
@@ -205,9 +198,6 @@ public class TriageOrchestrator {
             )
             .collect(Collectors.toList());
 
-        // allOf().join() waits for all futures. Each future has already
-        // been mapped to either a real output, a timeout output, or an
-        // exception output — so join won't throw here.
         CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
 
         return futures.stream()
@@ -265,5 +255,36 @@ public class TriageOrchestrator {
             triage.severityEnum() != null ? triage.severityEnum().name() : "UNKNOWN",
             rootSpan
         );
+    }
+
+    /**
+     * Extract the reasoning field from a specialist's payload JSON, if
+     * present. Aggregator's prompt is more useful when it can see WHY
+     * each specialist reached its conclusion, not just what they said.
+     */
+    private String extractReasoning(String payloadJson) {
+        if (payloadJson == null || payloadJson.isBlank()) return "";
+        // Cheap substring extraction — proper Jackson parse would be
+        // overkill for one field. If the payload isn't a well-formed
+        // JSON object with a "reasoning" key, we get "".
+        int idx = payloadJson.indexOf("\"reasoning\"");
+        if (idx < 0) return "";
+        int colonIdx = payloadJson.indexOf(':', idx);
+        if (colonIdx < 0) return "";
+        int quoteStart = payloadJson.indexOf('"', colonIdx);
+        if (quoteStart < 0) return "";
+        int quoteEnd = payloadJson.indexOf('"', quoteStart + 1);
+        // Handle escaped quotes minimally.
+        while (quoteEnd > 0 && payloadJson.charAt(quoteEnd - 1) == '\\') {
+            quoteEnd = payloadJson.indexOf('"', quoteEnd + 1);
+        }
+        if (quoteEnd < 0) return "";
+        return payloadJson.substring(quoteStart + 1, quoteEnd);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        if (s.length() <= max) return s;
+        return s.substring(0, max) + "...";
     }
 }
