@@ -8,6 +8,8 @@ import dev.sumituppal.pager.domain.TriageRun;
 import dev.sumituppal.pager.domain.TriageRunRepository;
 import dev.sumituppal.pager.domain.TriageStatus;
 import dev.sumituppal.pager.ingress.TriageJob;
+import dev.sumituppal.pager.hitl.HitlDecisionResult;
+import dev.sumituppal.pager.hitl.HitlGate;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.Span;
 import dev.sumituppal.pager.observability.SpanContext;
@@ -34,37 +36,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-
-/**
- * The orchestrator: takes a job off the queue and drives one triage from
- * queued → running → 4-way specialist fan-out → aggregation → completed.
- *
- * <h2>The full pipeline (PR #11)</h2>
- * <ol>
- *   <li>Load the triage row, verify not terminal.</li>
- *   <li>Mark it running.</li>
- *   <li>Fan out to 4 specialists in parallel (Symptoms, Change,
- *       Metrics, Comms) via {@link CompletableFuture}.</li>
- *   <li>Persist all 4 findings.</li>
- *   <li>Run the Aggregator over the 4 findings.</li>
- *   <li>Persist the aggregator's merged finding (5th row, with a real
- *       cause category).</li>
- *   <li>Mark the triage completed with the merged summary.</li>
- * </ol>
- *
- * <h2>Why persist the aggregator finding as a 5th row?</h2>
- * <p>The {@code findings} table becomes self-describing: a single
- * {@code SELECT * FROM findings WHERE triage_id = ?} returns all 4
- * specialist views plus the merged conclusion. The trace viewer,
- * cost ledger, and audit workflows all read from the same table
- * without re-joining triage_runs.
- *
- * <h2>Failure isolation</h2>
- * <p>Each specialist can fail independently; the aggregator can fail
- * independently; the triage still completes. If all four specialists
- * timed out, the aggregator falls back to whatever the highest-
- * confidence input was, and the triage completes with that.
- */
 @Component
 public class TriageOrchestrator {
 
@@ -77,6 +48,7 @@ public class TriageOrchestrator {
     private final Aggregator aggregator;
     private final long specialistTimeoutMs;
     private final ExecutorService specialistExecutor;
+    private final HitlGate hitlGate;
 
     public TriageOrchestrator(
             TriageRunRepository triageRuns,
@@ -87,12 +59,14 @@ public class TriageOrchestrator {
             MetricsSpecialist metrics,
             CommsSpecialist comms,
             Aggregator aggregator,
+            HitlGate hitlGate,
             PagerProperties properties) {
         this.triageRuns = triageRuns;
         this.findings = findings;
         this.events = events;
         this.specialists = List.of(symptoms, change, metrics, comms);
         this.aggregator = aggregator;
+        this.hitlGate = hitlGate;
         this.specialistTimeoutMs = properties.specialistTimeoutMs();
         this.specialistExecutor = Executors.newFixedThreadPool(
             specialists.size(),
@@ -159,9 +133,24 @@ public class TriageOrchestrator {
                     triage.getId(), rootSpan, aggregatorInputs);
 
                 // Step 4 — persist the aggregator's merged finding as a 5th row.
+                // Step 4 — persist the aggregator's merged finding as a 5th row.
                 persistFinding(triage, Specialist.AGGREGATOR, merged);
 
-                // Step 5 — mark the triage completed with the merged summary.
+                // Step 5 — run the HITL gate. This is the safety layer:
+                // it decides auto-post vs approval-required based on
+                // the aggregator's confidence and category. Every
+                // triage produces exactly one NotificationRecord row.
+                HitlDecisionResult gateResult = hitlGate.gate(
+                    triage.getId(),
+                    merged.category(),
+                    merged.confidence(),
+                    merged.summary());
+                log.info("triage {} gate decision: {} — {}",
+                    triage.getId(),
+                    gateResult.decision().dbValue(),
+                    gateResult.reason());
+
+                // Step 6 — mark the triage completed with the merged summary.
                 String finalSummary = !merged.summary().isBlank()
                     ? merged.summary()
                     : "No specialist produced a usable finding.";
