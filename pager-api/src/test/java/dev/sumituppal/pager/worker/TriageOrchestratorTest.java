@@ -18,6 +18,7 @@ import dev.sumituppal.pager.specialist.MetricsSpecialist;
 import dev.sumituppal.pager.specialist.SpecialistInput;
 import dev.sumituppal.pager.specialist.SpecialistOutput;
 import dev.sumituppal.pager.specialist.SymptomsSpecialist;
+import static org.mockito.ArgumentMatchers.anyList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,9 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import dev.sumituppal.pager.domain.NotificationDecision;
+import dev.sumituppal.pager.hitl.HitlDecisionResult;
+import dev.sumituppal.pager.hitl.HitlGate;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -52,6 +56,7 @@ class TriageOrchestratorTest {
     private MetricsSpecialist metrics;
     private CommsSpecialist comms;
     private Aggregator aggregator;
+    private HitlGate hitlGate;
     private TriageOrchestrator orchestrator;
 
     @BeforeEach
@@ -63,6 +68,11 @@ class TriageOrchestratorTest {
         change = mock(ChangeSpecialist.class);
         metrics = mock(MetricsSpecialist.class);
         comms = mock(CommsSpecialist.class);
+        hitlGate = mock(HitlGate.class);
+        when(hitlGate.gate(anyString(), any(), any(), anyString()))
+            .thenReturn(new HitlDecisionResult(
+                NotificationDecision.AUTO_POSTED,
+                "test message", "log", "test reason"));
         aggregator = mock(Aggregator.class);
 
         when(symptoms.kind()).thenReturn(Specialist.SYMPTOMS);
@@ -82,7 +92,7 @@ class TriageOrchestratorTest {
         orchestrator = new TriageOrchestrator(
             triageRuns, findings, events,
             symptoms, change, metrics, comms,
-            aggregator, properties);
+            aggregator, hitlGate, properties);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -242,6 +252,33 @@ class TriageOrchestratorTest {
         verify(events, times(1)).spanStart(any());
         verify(events, times(1)).spanEnd(any(), anyLong(), eq("completed"));
         verify(events, never()).error(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("gate is called with the aggregator's merged output")
+    void gateIsCalled() {
+        TriageRun triage = newQueuedTriage("triage_gate");
+        when(triageRuns.findById(any())).thenReturn(Optional.of(triage));
+        when(symptoms.analyze(any())).thenReturn(sample("s", "0.5"));
+        when(change.analyze(any())).thenReturn(sample("c", "0.4"));
+        when(metrics.analyze(any())).thenReturn(sample("m", "0.3"));
+        when(comms.analyze(any())).thenReturn(sample("co", "0.6"));
+
+        SpecialistOutput merged = new SpecialistOutput(
+            FindingCategory.DEPLOY_REGRESSION,
+            "merged summary",
+            new BigDecimal("0.80"),
+            "{\"reasoning\":\"merged\"}"
+        );
+        when(aggregator.aggregate(anyString(), any(), anyList())).thenReturn(merged);
+
+        orchestrator.run(new TriageJob("triage_gate", "PGR1", 1));
+
+        verify(hitlGate, times(1)).gate(
+            eq("triage_gate"),
+            eq(FindingCategory.DEPLOY_REGRESSION),
+            eq(new BigDecimal("0.80")),
+            eq("merged summary"));
     }
 
     // ----- helpers -----

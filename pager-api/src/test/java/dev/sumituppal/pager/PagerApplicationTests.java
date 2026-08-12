@@ -96,6 +96,15 @@ class PagerApplicationTests {
     private dev.sumituppal.pager.observability.AgentEventEmitter agentEventEmitter;
 
     @MockitoBean
+    private dev.sumituppal.pager.domain.NotificationRecordRepository notificationRecordRepository;
+
+    @MockitoBean
+    private dev.sumituppal.pager.hitl.NotificationSink notificationSink;
+
+    @MockitoBean
+    private dev.sumituppal.pager.hitl.HitlGate hitlGate;
+    
+    @MockitoBean
     private dev.sumituppal.pager.specialist.ChangeSpecialist changeSpecialist;
 
     @MockitoBean
