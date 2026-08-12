@@ -75,6 +75,9 @@ public abstract class AbstractLlmSpecialist implements SpecialistAgent {
 
     /** Variables to substitute into the prompt. */
     protected abstract Map<String, String> promptVariables(SpecialistInput input);
+    protected ChatClient.ChatCompletion callLlm(String rendered) {
+        return chat.completeFast(rendered);
+    }
 
     @Override
     public SpecialistOutput analyze(SpecialistInput input) {
@@ -86,8 +89,7 @@ public abstract class AbstractLlmSpecialist implements SpecialistAgent {
                 PromptTemplate template = prompts.get(promptName());
                 String rendered = template.render(promptVariables(input));
 
-                ChatClient.ChatCompletion completion = chat.completeFast(rendered);
-
+                ChatClient.ChatCompletion completion = callLlm(rendered);
                 // Cost is $0 for Groq's free tier; we still emit the event
                 // for consistency. A proper cost calculation moves to a
                 // ModelPricing service in a later PR.
