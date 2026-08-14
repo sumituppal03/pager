@@ -99,6 +99,9 @@ class PagerApplicationTests {
     private dev.sumituppal.pager.domain.NotificationRecordRepository notificationRecordRepository;
 
     @MockitoBean
+    private dev.sumituppal.pager.api.TriageQueryController triageQueryController;
+    
+    @MockitoBean
     private dev.sumituppal.pager.hitl.NotificationSink notificationSink;
 
     @MockitoBean
