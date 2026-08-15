@@ -7,11 +7,15 @@ import dev.sumituppal.pager.llm.PromptRegistry;
 import dev.sumituppal.pager.llm.PromptTemplate;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.SpanContext;
+import dev.sumituppal.pager.rag.HybridRetriever;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -25,6 +29,9 @@ import static org.mockito.Mockito.when;
  * <p>Focus areas: identity, prompt-name wiring, and the key contract
  * this specialist has that others don't — it uses the QUALITY model,
  * not the FAST one.
+ *
+ * <p>The retriever is mocked with empty results — RAG integration is
+ * exercised end-to-end via the manual demo rather than in unit tests.
  */
 class CommsSpecialistTest {
 
@@ -32,6 +39,7 @@ class CommsSpecialistTest {
     private PromptRegistry prompts;
     private AgentEventEmitter events;
     private ObjectMapper objectMapper;
+    private HybridRetriever retriever;
     private CommsSpecialist specialist;
 
     @BeforeEach
@@ -40,11 +48,13 @@ class CommsSpecialistTest {
         prompts = mock(PromptRegistry.class);
         events = mock(AgentEventEmitter.class);
         objectMapper = new ObjectMapper();
+        retriever = mock(HybridRetriever.class);
+        when(retriever.retrieve(anyString(), anyInt())).thenReturn(List.of());
 
         when(prompts.get("comms")).thenReturn(
-            new PromptTemplate("comms", "v1", "Draft: {{alertSummary}}"));
+            new PromptTemplate("comms", "v1", "Draft: {{alertSummary}} {{retrievedContext}}"));
 
-        specialist = new CommsSpecialist(chat, prompts, events, objectMapper);
+        specialist = new CommsSpecialist(chat, prompts, events, objectMapper, retriever);
     }
 
     @Test

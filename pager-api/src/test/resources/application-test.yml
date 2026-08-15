@@ -20,3 +20,7 @@ pager:
     base-url: https://api.groq.com/openai/v1
     temperature: 0.0
     timeout-ms: 30000
+
+  embedder:
+    base-url: http://localhost:8000
+    timeout-ms: 30000

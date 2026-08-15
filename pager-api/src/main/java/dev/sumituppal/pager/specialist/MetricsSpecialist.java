@@ -30,8 +30,9 @@ public class MetricsSpecialist extends AbstractLlmSpecialist {
             ChatClient chat,
             PromptRegistry prompts,
             AgentEventEmitter events,
-            ObjectMapper objectMapper) {
-        super(chat, prompts, events, objectMapper);
+            ObjectMapper objectMapper,
+            dev.sumituppal.pager.rag.HybridRetriever retriever) {
+        super(chat, prompts, events, objectMapper, retriever);
     }
 
     @Override

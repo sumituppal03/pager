@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.sumituppal.pager.domain.FindingCategory;
 import dev.sumituppal.pager.domain.Specialist;
 import dev.sumituppal.pager.llm.ChatClient;
+import dev.sumituppal.pager.rag.Document;
+import dev.sumituppal.pager.rag.HybridRetriever;
 import dev.sumituppal.pager.llm.PromptRegistry;
 import dev.sumituppal.pager.llm.PromptTemplate;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
@@ -16,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Map;
+import java.util.List;
 
 /**
  * Base class for LLM-backed specialists. Encapsulates the pattern shared
@@ -58,16 +61,19 @@ public abstract class AbstractLlmSpecialist implements SpecialistAgent {
     protected final PromptRegistry prompts;
     protected final AgentEventEmitter events;
     protected final ObjectMapper objectMapper;
+    protected final HybridRetriever retriever;
 
     protected AbstractLlmSpecialist(
             ChatClient chat,
             PromptRegistry prompts,
             AgentEventEmitter events,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            HybridRetriever retriever) {
         this.chat = chat;
         this.prompts = prompts;
         this.events = events;
         this.objectMapper = objectMapper;
+        this.retriever = retriever;
     }
 
     /** Prompt template name for this specialist — e.g. "symptoms", "change". */
@@ -87,7 +93,9 @@ public abstract class AbstractLlmSpecialist implements SpecialistAgent {
         try (Span span = Span.open(events, childSpan)) {
             try {
                 PromptTemplate template = prompts.get(promptName());
-                String rendered = template.render(promptVariables(input));
+                Map<String, String> vars = new java.util.HashMap<>(promptVariables(input));
+                vars.put("retrievedContext", retrieveContext(input));
+                String rendered = template.render(vars);
 
                 ChatClient.ChatCompletion completion = callLlm(rendered);
                 // Cost is $0 for Groq's free tier; we still emit the event
@@ -217,6 +225,33 @@ public abstract class AbstractLlmSpecialist implements SpecialistAgent {
 
     protected static String nullToEmpty(String s) {
         return s == null ? "" : s;
+    }
+    
+    protected String retrieveContext(SpecialistInput input) {
+        try {
+            String query = String.format("%s %s severity %s",
+                nullToEmpty(input.alertSummary()),
+                nullToEmpty(input.service()),
+                nullToEmpty(input.severity()));
+
+            List<Document> docs = retriever.retrieve(query, 3);
+            if (docs.isEmpty()) {
+                return "No relevant runbooks or post-mortems found.";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < docs.size(); i++) {
+                Document doc = docs.get(i);
+                sb.append(String.format("--- Retrieved document %d (%s): %s ---%n",
+                    i + 1, doc.getKind(), doc.getTitle()));
+                sb.append(doc.getContent().trim()).append("\n\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("retrieval failed for triage {}: {}",
+                input.triageId(), e.getMessage());
+            return "Retrieval unavailable — reasoning from alert alone.";
+        }
     }
 
     @SuppressWarnings("unused")

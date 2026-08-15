@@ -24,6 +24,11 @@ Rules:
 - reasoning is 1-2 sentences describing your writing choices.
 - Do NOT include any text outside the JSON object.
 
+Relevant runbooks and past post-mortems for reference (these may be helpful
+context; use them to inform your analysis but don't quote them verbatim):
+
+{{retrievedContext}}
+
 Incident details:
 
 - Alert summary: {{alertSummary}}

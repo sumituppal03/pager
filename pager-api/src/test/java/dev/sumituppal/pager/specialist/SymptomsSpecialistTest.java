@@ -8,11 +8,13 @@ import dev.sumituppal.pager.llm.PromptRegistry;
 import dev.sumituppal.pager.llm.PromptTemplate;
 import dev.sumituppal.pager.observability.AgentEventEmitter;
 import dev.sumituppal.pager.observability.SpanContext;
+import dev.sumituppal.pager.rag.HybridRetriever;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -27,8 +29,8 @@ import static org.mockito.Mockito.when;
 /**
  * Tests for {@link SymptomsSpecialist}.
  *
- * <p>All LLM interaction is mocked. The specialist under test is
- * exercised through its full analyze path so we cover:
+ * <p>All LLM and retrieval interaction is mocked. The specialist under
+ * test is exercised through its full analyze path so we cover:
  * <ol>
  *   <li>Happy JSON response is parsed correctly.</li>
  *   <li>Response wrapped in Markdown code fences is unwrapped.</li>
@@ -36,12 +38,17 @@ import static org.mockito.Mockito.when;
  *   <li>Confidence values outside 0.0-1.0 are clamped, not rejected.</li>
  *   <li>An LLM call failure returns UNKNOWN with the error details.</li>
  *   <li>An llm.call event is emitted with token counts.</li>
+ *   <li>Preamble text before JSON is stripped.</li>
+ *   <li>Trailing text after JSON is stripped.</li>
  * </ol>
  *
  * <p>Note that this specialist always produces findings with
  * {@link FindingCategory#UNKNOWN} — causal categorization is not
  * its responsibility. The Aggregator (PR #11) will map observations
  * to specific causes.
+ *
+ * <p>The retriever is mocked with empty results — RAG integration is
+ * exercised end-to-end via the manual demo rather than in unit tests.
  */
 class SymptomsSpecialistTest {
 
@@ -49,10 +56,11 @@ class SymptomsSpecialistTest {
     private PromptRegistry prompts;
     private AgentEventEmitter events;
     private ObjectMapper objectMapper;
+    private HybridRetriever retriever;
     private SymptomsSpecialist specialist;
 
     private static final String STUB_PROMPT_BODY =
-        "Analyze: {{alertSummary}} for {{service}} at {{severity}} ({{incidentId}})";
+        "Analyze: {{alertSummary}} for {{service}} at {{severity}} ({{incidentId}}) {{retrievedContext}}";
 
     @BeforeEach
     void setUp() {
@@ -60,11 +68,13 @@ class SymptomsSpecialistTest {
         prompts = mock(PromptRegistry.class);
         events = mock(AgentEventEmitter.class);
         objectMapper = new ObjectMapper();
+        retriever = mock(HybridRetriever.class);
+        when(retriever.retrieve(anyString(), anyInt())).thenReturn(List.of());
 
         when(prompts.get("symptoms")).thenReturn(
             new PromptTemplate("symptoms", "v1", STUB_PROMPT_BODY));
 
-        specialist = new SymptomsSpecialist(chat, prompts, events, objectMapper);
+        specialist = new SymptomsSpecialist(chat, prompts, events, objectMapper, retriever);
     }
 
     @Test
@@ -192,6 +202,40 @@ class SymptomsSpecialistTest {
             any(BigDecimal.class),
             anyLong()
         );
+    }
+
+    @Test
+    @DisplayName("extractFirstJsonObject strips preamble text")
+    void extractsJsonFromPreamble() {
+        String llmResponse = """
+            The alert indicates a checkout issue.
+            {
+              "summary": "Extracted from preamble",
+              "confidence": 0.7,
+              "reasoning": "test"
+            }
+            """;
+        stubLlmResponse(llmResponse);
+
+        SpecialistOutput output = specialist.analyze(sampleInput());
+
+        assertThat(output.summary()).isEqualTo("Extracted from preamble");
+        assertThat(output.confidence()).isEqualByComparingTo("0.700");
+    }
+
+    @Test
+    @DisplayName("extractFirstJsonObject handles trailing text after JSON")
+    void extractsJsonWithTrailingText() {
+        String llmResponse = """
+            {"summary":"clean","confidence":0.5,"reasoning":"y"}
+
+            Some trailing explanation here.
+            """;
+        stubLlmResponse(llmResponse);
+
+        SpecialistOutput output = specialist.analyze(sampleInput());
+
+        assertThat(output.summary()).isEqualTo("clean");
     }
 
     // ----- helpers -----

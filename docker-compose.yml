@@ -2,15 +2,17 @@
 # Local dev environment for Pager.
 #
 # Usage:
-#   docker compose up -d           # bring up Postgres + Redis
+#   docker compose up -d           # bring up Postgres + Redis + Embedder
 #   docker compose down            # stop
 #   docker compose down -v         # stop and wipe data
 #
 # The Postgres image is `pgvector/pgvector`, which is stock Postgres
-# with the pgvector extension pre-installed. We enable it in the
-# init script.
+# with the pgvector extension pre-installed. V3 migration enables it.
 #
-
+# The embedder service (PR #14) is a Python FastAPI sidecar that runs
+# sentence-transformers locally. It exposes /embed for the Java app
+# to call. Model downloads at build time so container startup is fast.
+#
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -45,6 +47,21 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  embedder:
+    build:
+      context: ./embedder
+      dockerfile: Dockerfile
+    container_name: pager-embedder
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   pager-pgdata:

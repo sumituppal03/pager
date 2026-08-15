@@ -93,6 +93,21 @@ class PagerApplicationTests {
     private dev.sumituppal.pager.domain.AgentEventRepository agentEventRepository;
 
     @MockitoBean
+    private dev.sumituppal.pager.rag.HybridRetriever hybridRetriever;
+
+    @MockitoBean
+    private dev.sumituppal.pager.rag.EmbeddingClient embeddingClient;
+
+    @MockitoBean
+    private dev.sumituppal.pager.rag.DocumentRepository documentRepository;
+
+    @MockitoBean
+    private dev.sumituppal.pager.rag.DocumentEmbeddingRepository documentEmbeddingRepository;
+
+    @MockitoBean
+    private dev.sumituppal.pager.rag.RunbookCorpusLoader runbookCorpusLoader;
+
+    @MockitoBean
     private dev.sumituppal.pager.observability.AgentEventEmitter agentEventEmitter;
 
     @MockitoBean
