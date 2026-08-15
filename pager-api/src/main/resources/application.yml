@@ -108,6 +108,10 @@ pager:
     temperature: ${PAGER_LLM_TEMPERATURE:0.2}
     timeout-ms: ${PAGER_LLM_TIMEOUT_MS:30000}
 
+  embedder:
+    base-url: ${PAGER_EMBEDDER_URL:http://localhost:8000}
+    timeout-ms: ${PAGER_EMBEDDER_TIMEOUT_MS:30000}
+
 # ------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------
